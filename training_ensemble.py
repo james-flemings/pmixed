@@ -14,24 +14,16 @@ import argparse
 
 set_seed(0)
 
-#dist.init_process_group("gloo")
-#world_size = dist.get_world_size()
-#rank = dist.get_rank()
-
-#DEVICE = f"cuda:{rank}"
-
 parser = argparse.ArgumentParser()
 parser.add_argument("--model_name", type=str, default="GPT2")
 parser.add_argument("--dataset", type=str, default="wikitext")
 parser.add_argument("--subset", type=str, default="wikitext-103-raw-v1")
 parser.add_argument("--num_ensemble", type=int, default=8)
 parser.add_argument("--epochs", type=int, default=10)
-parser.add_argument("--lora_r", type=int, default=8)
+parser.add_argument("--lora_r", type=int, default=4)
 parser.add_argument("--block_size", type=int, default=526)
 parser.add_argument("--learning_rate", type=float, default=2e-5)
 parser.add_argument("--weight_decay", type=float, default=0.01)
-
-
 
 
 def main():
@@ -62,23 +54,24 @@ def main():
     if not os.path.exists("models"):
         os.mkdir("models")
 
-    print(f"\n\nTotal size of training dataset {len(lm_dataset['train'])}\n\n")
+    print(f"\n\nTotal size of training dataset {len(lm_dataset['train'])}")
 
     for i in range(8):
         lm_shards = {} 
         lm_shards['train'] = lm_dataset['train'].shard(num_shards=args.num_ensemble, index=i)
         lm_shards['validation'] = lm_dataset['train'].shard(num_shards=args.num_ensemble, index=i)
-        print(f"\n\nTraining Shard {i} of size {len(lm_shards['train'])}\n\n")
 
         lora_config = LoraConfig(
-            r=8,
+            r=args.lora_r,
             lora_alpha=8,
             lora_dropout=0,
             bias="none",
             task_type="CAUSAL_LM"
         )
         lora_model = get_peft_model(pretrained_model, lora_config)#.to(DEVICE)
-        #lora_model = DDP(lora_model, device_ids=[rank])
+
+        print(f"\n\nTraining Shard {i} of size {len(lm_shards['train'])}")
+        print(f"Trainable paramters {print_trainable_parameters(lora_model)}\n\n")
 
         output_dir = os.path.join("models", f"lora-{args.model_name}-{i}-finetuned-wikitext2")
         train_args = TrainingArguments(
@@ -96,7 +89,7 @@ def main():
         )
         trainer.train()
         eval_results = trainer.evaluate()
-        print(f"Perplexity: {math.exp(eval_results['eval_loss']):.2f}")
+        print(f"\n\nPerplexity: {math.exp(eval_results['eval_loss']):.2f}\n\n")
 
 
 def wiki_tokenize_function(examples, tokenizer):
@@ -124,9 +117,9 @@ def print_trainable_parameters(model):
         all_param += param.numel()
         if param.requires_grad:
             trainable_params += param.numel()
-        print(
-        f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
-        )
+    print(
+    f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
+    )
 
 
 if __name__ == "__main__":
