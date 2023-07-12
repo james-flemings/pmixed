@@ -24,6 +24,7 @@ parser.add_argument("--lora_r", type=int, default=4)
 parser.add_argument("--block_size", type=int, default=526)
 parser.add_argument("--learning_rate", type=float, default=2e-5)
 parser.add_argument("--weight_decay", type=float, default=0.01)
+parser.add_argument("--batch_size", type=int, default=8)
 
 
 def main():
@@ -77,9 +78,12 @@ def main():
         train_args = TrainingArguments(
             output_dir=output_dir,
             evaluation_strategy="epoch",
+            save_strategy="epoch",
             num_train_epochs=args.epochs,
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
+            load_best_model_at_end=True,
+            per_device_train_batch_size=args.batch_size,
         )
         trainer = Trainer(
             model=lora_model,
@@ -90,7 +94,7 @@ def main():
         trainer.train()
         eval_results = trainer.evaluate()
         print(f"\n\nPerplexity: {math.exp(eval_results['eval_loss']):.2f}\n\n")
-
+        trainer.save_model(output_dir)
 
 def wiki_tokenize_function(examples, tokenizer):
     return tokenizer(examples["text"])
