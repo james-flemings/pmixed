@@ -26,6 +26,7 @@ parser.add_argument("--learning_rate", type=float, default=2e-5)
 parser.add_argument("--weight_decay", type=float, default=0.01)
 parser.add_argument("--batch_size", type=int, default=8)
 
+START = 3
 
 def main():
     args = parser.parse_args()
@@ -57,14 +58,14 @@ def main():
 
     print(f"\n\nTotal size of training dataset {len(lm_dataset['train'])}")
 
-    for i in range(8):
+    for i in range(START, args.num_ensemble):
         lm_shards = {} 
         lm_shards['train'] = lm_dataset['train'].shard(num_shards=args.num_ensemble, index=i)
         lm_shards['validation'] = lm_dataset['train'].shard(num_shards=args.num_ensemble, index=i)
 
         lora_config = LoraConfig(
             r=args.lora_r,
-            lora_alpha=8,
+            lora_alpha=args.lora_r,
             lora_dropout=0,
             bias="none",
             task_type="CAUSAL_LM"
