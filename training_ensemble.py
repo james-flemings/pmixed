@@ -21,8 +21,8 @@ parser.add_argument("--subset", type=str, default="wikitext-103-raw-v1")
 parser.add_argument("--num_ensemble", type=int, default=8)
 parser.add_argument("--epochs", type=int, default=10)
 parser.add_argument("--lora_r", type=int, default=4)
-parser.add_argument("--block_size", type=int, default=526)
-parser.add_argument("--learning_rate", type=float, default=2e-5)
+parser.add_argument("--block_size", type=int, default=512)
+parser.add_argument("--learning_rate", type=float, default=2e-4)
 parser.add_argument("--weight_decay", type=float, default=0.01)
 parser.add_argument("--batch_size", type=int, default=8)
 
@@ -75,7 +75,7 @@ def main():
         print(f"\n\nTraining Shard {i} of size {len(lm_shards['train'])}")
         print(f"Trainable paramters {print_trainable_parameters(lora_model)}\n\n")
 
-        output_dir = os.path.join("models", f"lora-{args.model_name}-{i}-finetuned-wikitext2")
+        output_dir = os.path.join("models", f"lora-{args.model_name}-{i}-finetuned-{args.subset}")
         train_args = TrainingArguments(
             output_dir=output_dir,
             evaluation_strategy="epoch",
