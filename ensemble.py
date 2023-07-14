@@ -6,7 +6,7 @@ import torch.nn as nn
 import numpy as np
 
 class Ensemble():
-    def __init__(self, model_dirs, pub_model,
+    def __init__(self, model_dirs, pub_model, 
                 device="cpu", q_budget=1024, alpha=2, eps=2,
                 sigma_1 =1, sigma_2=0.5):
         self.device = device
@@ -78,16 +78,28 @@ class Ensemble():
                                                    output_dists[self.num_ensemble]
                                                    )
         ensemble_dist +=  np.random.normal(0, self.sigma_2, dim_size)
-        ensemble_dist += torch.min(ensemble_dist)
+        # This still gets negative numbers
+        ensemble_dist += 2 * torch.min(ensemble_dist) 
         ensemble_dist /= torch.sum(ensemble_dist) 
 
         for i in range(self.num_ensemble):
             self.indiv_eps[i] += cur_eps[i] if self.lambdas[i] != 0 else 0 
 
         for i in range(self.num_ensemble):
-            self.lambdas[i] = self.sigma_2 / output_dists[i] * np.sqrt(2 * 
-                                                            self.num_ensemble *
-                                                            self.eps *
-                                                            self.alpha)
+            self.lambdas[i] = self.sigma_2 * self.num_ensemble / np.sqrt(
+                                                torch.sum(output_dists[i]**2)) * np.sqrt(
+                                                            (2 * self.eps) /
+                                                            (self.alpha * self.q_budget)
+                                                            )
         
         return ensemble_dist
+
+    def reg_pred(self, output_dists):
+        ensemble_dist = torch.zeros(len(output_dists[0]))
+        for i in range(self.num_ensemble):
+            ensemble_dist += output_dists[i] / self.num_ensemble
+        return ensemble_dist 
+
+    def print_priv_budgets(self):
+        for budg in self.indiv_eps:
+            print(budg)
