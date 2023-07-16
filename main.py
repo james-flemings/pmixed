@@ -15,7 +15,7 @@ parser.add_argument("--model_name", type=str, default="GPT2")
 parser.add_argument("--data_subset", type=str, default="wikitext-103-raw-v1")
 parser.add_argument("--device", type=str, default="cuda:7")
 parser.add_argument("--seq_length", type=int, default=512)
-parser.add_argument("--query_budget", type=int, default=1024)
+parser.add_argument("--query_budget", type=int, default=1048)
 
 
 def main():
@@ -32,29 +32,52 @@ def main():
     seq_length = 526
     corpus = load_wikitext()
     val_loader = DataLoader(CorpusDataset(corpus['valid'], seq_length))
-    losses = []
+    priv_losses = []
+    pub_losses = []
+    fine_tuned_losses = []
     with torch.no_grad():
         for i, data in enumerate(tqdm.tqdm(val_loader)):
             metric = Perplexity()
             data = data.to(args.device)
             output_dists = priv_ensemble.pred_dist(data)
+            pub_dists = pub_model(data).logits.squeeze().to('cpu')
+
             priv_dists = []
+            fine_tuned_dists = []
             for j in range(seq_length):
-                #priv_dist =priv_ensemble.reg_pred([output_dist[j]
-                #                                   for output_dist in output_dists])
-                priv_dist = priv_ensemble.priv_pred([output_dist[j]
-                                                     for output_dist in output_dists])
+                inp = [output_dist[j] for output_dist in output_dists]
+                fine_tuned_dist = priv_ensemble.reg_pred(inp)
+                priv_dist = priv_ensemble.priv_pred(inp)
+                
                 priv_dists.append(torch.log(priv_dist))
-            #priv_dists = torch.stack(priv_dists).unsqueeze(0)
-            priv_dists = torch.stack(priv_dists)
-            #labels = data.squeeze(0).unsqueeze(-1)
-            #metric.update(priv_dists, data.to('cpu'))
-            #losses.append(metric.compute().item())
-            losses.append(XHeval(priv_dists, data.to('cpu')))
+                fine_tuned_dists.append(torch.log(fine_tuned_dist))
+
+            priv_dists = torch.stack(priv_dists).unsqueeze(0)
+            fine_tuned_dists = torch.stack(fine_tuned_dists).unsqueeze(0)
+            pub_dists = pub_dists.unsqueeze(0)
+
+            labels = data.squeeze(0).unsqueeze(-1)
+            metric.update(priv_dists, data.to('cpu'))
+            priv_losses.append(metric.compute().item())
+            metric.update(pub_dists, data.to('cpu'))
+            pub_losses.append(metric.compute().item())
+            metric.update(fine_tuned_dists, data.to('cpu'))
+            fine_tuned_losses.append(metric.compute().item())
+
+            #priv_dists = torch.stack(priv_dists)
+            #fine_tuned_dists = torch.stack(fine_tuned_dists)
+
+            #priv_losses.append(XHeval(priv_dists, data.to('cpu')))
+            #fine_tuned_losses.append(XHeval(fine_tuned_dists, data.to('cpu')))
+            #pub_losses.append(XHeval(pub_dists, data.to('cpu')))
+            #priv_ensemble.print_priv_budgets()
+
             if i >= int(args.query_budget / seq_length):
                 break
-        print(f"Val Loss: {np.mean(losses):.4f} ")
-    priv_ensemble.print_priv_budgets()
+
+        print(f"Ensemble Val Loss: {np.mean(priv_losses):.4f} ")
+        print(f"Fine-Tuned Val Loss: {np.mean(fine_tuned_losses):.4f} ")
+        print(f"Pre-Trained Val Loss: {np.mean(pub_losses):.4f} ")
 
 def load_wikitext():
     corpus = dict()

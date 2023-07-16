@@ -19,7 +19,7 @@ class Ensemble():
         self.model_dirs = model_dirs
         self.lora_ensemble = 0 
         self.num_ensemble = len(self.model_dirs)
-        self.lambdas = [1 for _ in range(self.num_ensemble)]
+        self.lambdas = [3/4 for _ in range(self.num_ensemble)]
         self.indiv_eps = [0 for _ in range(self.num_ensemble)]
 
         for i, dir in enumerate(self.model_dirs):
@@ -65,6 +65,13 @@ class Ensemble():
 
     def priv_pred(self, output_dists):
         cur_eps = []
+        #for i in range(self.num_ensemble):
+            #self.lambdas[i] = min(1, self.sigma_2 * self.num_ensemble / np.sqrt(
+            #                                    torch.sum(output_dists[i]**2)) * np.sqrt(
+            #                                                (2 * self.eps) /
+            #                                                (self.alpha * self.q_budget)
+            #                                                )
+            #)
         for i in range(self.num_ensemble):
             cur_eps.append(self.calc_privacy_loss(output_dists[i], i))
             if self.indiv_eps[i] > self.eps:
@@ -77,21 +84,13 @@ class Ensemble():
                                                    (1 - self.lambdas[i]) *
                                                    output_dists[self.num_ensemble]
                                                    )
-        ensemble_dist +=  np.random.normal(0, self.sigma_2, dim_size)
+        #ensemble_dist +=  np.random.normal(0, self.sigma_2, dim_size)
         # This still gets negative numbers
-        ensemble_dist += 2 * torch.min(ensemble_dist) 
-        ensemble_dist /= torch.sum(ensemble_dist) 
+        #ensemble_dist += 2 * torch.min(ensemble_dist) 
+        #ensemble_dist /= torch.sum(ensemble_dist) 
 
         for i in range(self.num_ensemble):
             self.indiv_eps[i] += cur_eps[i] if self.lambdas[i] != 0 else 0 
-
-        for i in range(self.num_ensemble):
-            self.lambdas[i] = self.sigma_2 * self.num_ensemble / np.sqrt(
-                                                torch.sum(output_dists[i]**2)) * np.sqrt(
-                                                            (2 * self.eps) /
-                                                            (self.alpha * self.q_budget)
-                                                            )
-        
         return ensemble_dist
 
     def reg_pred(self, output_dists):
@@ -103,3 +102,8 @@ class Ensemble():
     def print_priv_budgets(self):
         for budg in self.indiv_eps:
             print(budg)
+        return
+    
+    def print_lambdas(self):
+        for lambd in self.lambdas:
+            print(lambd.item())
