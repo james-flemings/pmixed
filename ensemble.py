@@ -49,9 +49,9 @@ class Ensemble():
         for i in range(self.num_ensemble):
             self.lora_ensemble.set_adapter(f"lora-{i}")
             logits = self.lora_ensemble(context).logits.squeeze()
-            output_dists.append(nn.functional.softmax(logits, dim=1).to('cpu'))
+            output_dists.append(nn.functional.softmax(logits, dim=1))
         logits = self.pub_model(context).logits.squeeze()
-        output_dists.append(nn.functional.softmax(logits, dim=1).to('cpu'))
+        output_dists.append(nn.functional.softmax(logits, dim=1))
         return output_dists 
 
     def calc_privacy_loss(self, pred, i):
@@ -94,10 +94,10 @@ class Ensemble():
         return ensemble_dist
 
     def reg_pred(self, output_dists):
-        ensemble_dist = torch.zeros(len(output_dists[0]))
-        for i in range(self.num_ensemble):
-            ensemble_dist += output_dists[i] / self.num_ensemble
-        return ensemble_dist 
+        output = output_dists[0]
+        for i in range(1, self.num_ensemble):
+            output += output_dists[i] 
+        return output / self.num_ensemble
 
     def print_priv_budgets(self):
         for budg in self.indiv_eps:

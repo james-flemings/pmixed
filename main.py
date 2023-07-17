@@ -37,10 +37,9 @@ def main():
     fine_tuned_losses = []
     with torch.no_grad():
         for i, data in enumerate(tqdm.tqdm(val_loader)):
-            metric = Perplexity()
             data = data.to(args.device)
             output_dists = priv_ensemble.pred_dist(data)
-            pub_dists = pub_model(data).logits.squeeze().to('cpu')
+            pub_dists = nn.functional.softmax(pub_model(data).logits.squeeze()).to('cpu')
 
             priv_dists = []
             fine_tuned_dists = []
@@ -49,14 +48,15 @@ def main():
                 fine_tuned_dist = priv_ensemble.reg_pred(inp)
                 priv_dist = priv_ensemble.priv_pred(inp)
                 
-                priv_dists.append(torch.log(priv_dist))
-                fine_tuned_dists.append(torch.log(fine_tuned_dist))
+                #priv_dists.append(torch.log(priv_dist))
+                #fine_tuned_dists.append(torch.log(fine_tuned_dist))
+                priv_dists.append(priv_dist)
+                fine_tuned_dists.append(fine_tuned_dist)
 
             priv_dists = torch.stack(priv_dists).unsqueeze(0)
             fine_tuned_dists = torch.stack(fine_tuned_dists).unsqueeze(0)
             pub_dists = pub_dists.unsqueeze(0)
 
-            labels = data.squeeze(0).unsqueeze(-1)
             metric.update(priv_dists, data.to('cpu'))
             priv_losses.append(metric.compute().item())
             metric.update(pub_dists, data.to('cpu'))
@@ -84,6 +84,19 @@ def load_wikitext():
     for dset in ["valid", "train", "test"]:
         corpus[dset] = torch.load(os.path.join("data", f"wikitext-103-{dset}-corpus.pt"))
     return corpus
+
+def perplexity_calc(, labels):
+    metric = Perplexity()
+
+    #computes cross entropy
+    shift_logits = lm_logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+    shift_logits = shift_logits.view(-1, shift_logits.size(-1))
+    shift_labels = shift_labels.view(-1)
+    # Flatten the tokens
+    loss = nn.CrossEntropyLoss()
+    output = loss(shift_logits, shift_labels).item()
+    return output
 
 def XHeval(lm_logits, labels):
     #computes cross entropy
