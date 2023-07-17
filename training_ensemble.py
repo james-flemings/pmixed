@@ -19,20 +19,22 @@ parser.add_argument("--model_name", type=str, default="GPT2")
 parser.add_argument("--dataset", type=str, default="wikitext")
 parser.add_argument("--subset", type=str, default="wikitext-103-raw-v1")
 parser.add_argument("--num_ensemble", type=int, default=8)
-parser.add_argument("--epochs", type=int, default=1)
-parser.add_argument("--lora_r", type=int, default=16)
+parser.add_argument("--epochs", type=int, default=5)
+parser.add_argument("--lora_r", type=int, default=4)
+parser.add_argument("--lora_alpha", type=int, default=32)
+parser.add_argument("--lora_dropout", type=float, default=0.1)
 parser.add_argument("--block_size", type=int, default=512)
 parser.add_argument("--learning_rate", type=float, default=2e-4)
 parser.add_argument("--weight_decay", type=float, default=0.01)
 parser.add_argument("--batch_size", type=int, default=8)
 
-START = 3
+START = 0 
 
 def main():
     args = parser.parse_args()
     tokenizer = GPT2Tokenizer.from_pretrained(args.model_name)
     pretrained_model = GPT2LMHeadModel.from_pretrained(args.model_name,
-                        pad_token_id=tokenizer.eos_token_id)#.to(DEVICE)
+                        pad_token_id=tokenizer.eos_token_id)
 
     dataset = load_dataset(args.dataset, args.subset)
     tokenize_function = wiki_tokenize_function if args.dataset == "wikitext" else None
@@ -50,9 +52,6 @@ def main():
         num_proc=4
     ) 
 
-    def accuracy(preds, labels):
-        return (preds == labels).mean()
-
     if not os.path.exists("models"):
         os.mkdir("models")
 
@@ -60,22 +59,32 @@ def main():
 
     for i in range(START, args.num_ensemble):
         lm_shards = {} 
-        lm_shards['train'] = lm_dataset['train'].shard(num_shards=args.num_ensemble, index=i)
-        lm_shards['validation'] = lm_dataset['train'].shard(num_shards=args.num_ensemble, index=i)
+        if args.num_ensemble == 1:
+            lm_shards['train'] = lm_dataset['train']
+            lm_shards['validation'] = lm_dataset['validation']
+        else:
+            lm_shards['train'] = lm_dataset['train'].shard(num_shards=args.num_ensemble, index=i)
+            lm_shards['validation'] = lm_dataset['validation'].shard(num_shards=args.num_ensemble, index=i)
 
         lora_config = LoraConfig(
             r=args.lora_r,
-            lora_alpha=args.lora_r,
-            lora_dropout=0,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
             bias="none",
             task_type="CAUSAL_LM"
         )
-        lora_model = get_peft_model(pretrained_model, lora_config)#.to(DEVICE)
+        lora_model = get_peft_model(pretrained_model, lora_config)
 
         print(f"\n\nTraining Shard {i} of size {len(lm_shards['train'])}")
         print(f"Trainable paramters {print_trainable_parameters(lora_model)}\n\n")
 
-        output_dir = os.path.join("models", f"lora-{args.model_name}-{i}-finetuned-{args.subset}")
+        output_dir = 0
+        if args.num_ensemble == 1:
+            output_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.subset}")
+        else:
+            output_dir = os.path.join("models",
+                                    f"lora-{args.model_name}-{i}-finetuned-{args.subset}")
+
         train_args = TrainingArguments(
             output_dir=output_dir,
             evaluation_strategy="epoch",
@@ -86,6 +95,7 @@ def main():
             load_best_model_at_end=True,
             per_device_train_batch_size=args.batch_size,
         )
+        train_args = train_args.set_lr_scheduler(name="linear", warmup_steps=500)
         trainer = Trainer(
             model=lora_model,
             args=train_args,

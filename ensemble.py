@@ -4,6 +4,7 @@ from peft import PeftModel, PeftConfig
 from typing import List
 import torch.nn as nn
 import numpy as np
+import copy
 
 class Ensemble():
     def __init__(self, model_dirs, pub_model, 
@@ -23,8 +24,9 @@ class Ensemble():
         self.indiv_eps = [0 for _ in range(self.num_ensemble)]
 
         for i, dir in enumerate(self.model_dirs):
+            model = copy.deepcopy(self.pub_model) 
             if i == 0:
-                self.lora_ensemble = PeftModel.from_pretrained(pub_model, 
+                self.lora_ensemble = PeftModel.from_pretrained(model, 
                                                              dir,
                                                              adapter_name=f"lora-{i}"
                                                             ).to(self.device)
