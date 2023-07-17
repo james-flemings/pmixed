@@ -7,16 +7,19 @@ import numpy as np
 import copy
 
 class Ensemble():
-    def __init__(self, model_dirs, pub_model, 
+    def __init__(self, model_dirs, model_name, tokenizer,
                 device="cpu", q_budget=1024, alpha=2, eps=2,
                 sigma_1 =1, sigma_2=0.5):
         self.device = device
+        self.model_name = model_name
         self.q_budget = q_budget
         self.alpha = alpha
         self.eps = eps
         self.sigma_1 = sigma_1
         self.sigma_2 = sigma_2
-        self.pub_model = pub_model
+        self.pub_model = AutoModelForCausalLM.from_pretrained(self.model_name,
+                                                     pad_token_id=tokenizer.eos_token_id).to(
+                                                     self.device)
         self.model_dirs = model_dirs
         self.lora_ensemble = 0 
         self.num_ensemble = len(self.model_dirs)
@@ -24,9 +27,9 @@ class Ensemble():
         self.indiv_eps = [0 for _ in range(self.num_ensemble)]
 
         for i, dir in enumerate(self.model_dirs):
-            model = copy.deepcopy(self.pub_model) 
             if i == 0:
-                self.lora_ensemble = PeftModel.from_pretrained(model, 
+                self.lora_ensemble = PeftModel.from_pretrained(copy.deepcopy(
+                                                             self.pub_model), 
                                                              dir,
                                                              adapter_name=f"lora-{i}"
                                                             ).to(self.device)

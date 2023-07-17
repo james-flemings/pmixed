@@ -23,12 +23,18 @@ parser.add_argument("--query_budget", type=int, default=1024)
 def main():
     args = parser.parse_args()
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    pub_model = AutoModelForCausalLM.from_pretrained(args.model_name,
-                                                     pad_token_id=tokenizer.eos_token_id).to(
-                                                     args.device)
+
+    model_paths = [os.path.join("models", f"lora-{args.model_name}-{i}-finetuned-{args.data_subset}")
+                    for i in range(args.num_ensemble)]
+    priv_ensemble = Ensemble(model_paths,
+                             args.model_name,
+                             tokenizer,
+                             args.device,
+                             q_budget=args.query_budget)
+
 
     fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.data_subset}")
-    fine_tuned_model = PeftModel.from_pretrained(copy.deepcopy(pub_model),
+    fine_tuned_model = PeftModel.from_pretrained(copy.deepcopy(priv_ensemble.pub_model),
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
@@ -54,20 +60,13 @@ def main():
     test_data = lm_dataset['test']
     test_data.set_format(type="torch")
 
-    model_paths = [os.path.join("models", f"lora-{args.model_name}-{i}-finetuned-{args.data_subset}")
-                    for i in range(args.num_ensemble)]
-    priv_ensemble = Ensemble(model_paths,
-                             pub_model,
-                             args.device,
-                             q_budget=args.query_budget)
-
     pub_neg_log_likelihood = []
     fine_tuned_neg_log_likelihood = []
     for i in range(args.query_budget // seq_length):
         data = test_data[i]['input_ids'].to(args.device)
         labels = test_data[i]['labels'].to(args.device)
         with torch.no_grad():
-            pub_output_logits = pub_model(data, labels=labels).logits
+            pub_output_logits = priv_ensemble.pub_model(data, labels=labels).logits
 
             fine_tuned_output_logits = fine_tuned_model(data, labels=labels).logits
             
