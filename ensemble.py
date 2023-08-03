@@ -59,43 +59,21 @@ class Ensemble():
         output_dists.append(nn.functional.softmax(logits, dim=1))
         return output_dists 
 
-    def calc_privacy_loss(self, pred, i):
-        #self.indiv_eps[i] += self.alpha * (self.lambdas[i] / 
-        #                                   self.num_ensemble * pred)**2 / (2 * 
-        #                                   self.simga_1**2)
-        return self.alpha * (self.lambdas[i]**2 / 
-                                self.num_ensemble**2 * torch.sum(pred**2)) / (2 * 
-                                self.sigma_2**2) 
+    def calc_privacy_loss(self, dist):
+    #    for i, eps in enumerate(self.indiv_eps):
+        pass        
 
 
     def priv_pred(self, output_dists):
-        cur_eps = []
-        #for i in range(self.num_ensemble):
-            #self.lambdas[i] = min(1, self.sigma_2 * self.num_ensemble / np.sqrt(
-            #                                    torch.sum(output_dists[i]**2)) * np.sqrt(
-            #                                                (2 * self.eps) /
-            #                                                (self.alpha * self.q_budget)
-            #                                                )
-            #)
-        for i in range(self.num_ensemble):
-            cur_eps.append(self.calc_privacy_loss(output_dists[i], i))
-            if self.indiv_eps[i] > self.eps:
-                self.lambdas[i] = 0
         dim_size = len(output_dists[0])
-        ensemble_dist = torch.zeros(dim_size) 
+        ensemble_dist = torch.zeros(dim_size).to(self.device)
         for i in range(self.num_ensemble):
             ensemble_dist += 1/self.num_ensemble * (self.lambdas[i] * 
-                                                   output_dists[i] +
+                                                   output_dists[i]  +
                                                    (1 - self.lambdas[i]) *
-                                                   output_dists[self.num_ensemble]
-                                                   )
-        #ensemble_dist +=  np.random.normal(0, self.sigma_2, dim_size)
-        # This still gets negative numbers
-        #ensemble_dist += 2 * torch.min(ensemble_dist) 
-        #ensemble_dist /= torch.sum(ensemble_dist) 
-
-        for i in range(self.num_ensemble):
-            self.indiv_eps[i] += cur_eps[i] if self.lambdas[i] != 0 else 0 
+                                                   output_dists[self.num_ensemble] 
+                                                   )  
+        self.calc_privacy_loss(ensemble_dist)
         return ensemble_dist
 
     def reg_pred(self, output_dists):
@@ -112,3 +90,4 @@ class Ensemble():
     def print_lambdas(self):
         for lambd in self.lambdas:
             print(lambd.item())
+    

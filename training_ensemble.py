@@ -83,7 +83,7 @@ def main():
             output_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.subset}")
         else:
             output_dir = os.path.join("models",
-                                    f"lora-{args.model_name}-{i}-finetuned-{args.subset}")
+                                    f"constrained-lora-{args.model_name}-{i}-finetuned-{args.subset}")
 
         train_args = TrainingArguments(
             output_dir=output_dir,
