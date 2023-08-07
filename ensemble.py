@@ -61,18 +61,22 @@ class Ensemble():
         #output_dists.append(logits)
         return output_dists 
 
-    def calc_privacy_loss(self, p, mixed_dist, lambd, pub_pred, active_set):
-        losses = []
-        for i in active_set:
-            q = p - mixed_dist[i]
-            q *= self.num_ensemble / (self.num_ensemble - 1)
+    def calc_per_inst_priv_loss(self, p, mixed_dist, pub_pred):
+        N = self.num_ensemble
+        for i in range(self.num_ensemble):
+            q = (p - mixed_dist[i]) * N / (N - 1)
             r = p + pub_pred
             q += pub_pred
-
             self.instance_priv_loss[i] += max(Ensemble.renyiDiv(r, q, self.alpha),
                                               Ensemble.renyiDiv(q, r, self.alpha)
                                               )
 
+
+
+    def calc_indiv_priv_loss(self, p, mixed_dist, lambd, pub_pred, active_set):
+        losses = []
+        N = len(active_set)
+        for i in active_set:
             val, ind = torch.max(mixed_dist[i], 0)
             '''
             loss = (torch.log(1 + lambd * output[i][ind] /
@@ -86,7 +90,7 @@ class Ensemble():
             '''
             r = mixed_dist[i] + pub_pred
             q = copy.deepcopy(pub_pred)
-            r[ind] += (self.num_ensemble-1) / self.num_ensemble * lambd 
+            r[ind] += (N-1) / N * lambd 
             q[ind] += lambd
             loss = Ensemble.renyiDiv(r, q, self.alpha).cpu()
             self.personalized_priv_loss[i].append(loss)
@@ -95,21 +99,28 @@ class Ensemble():
 
 
     def priv_pred(self, output_dists):
-        self.lambdas = np.array([1/4 for _ in range(self.num_ensemble)])
+        self.lambdas = np.array([0.05 for _ in range(self.num_ensemble)])
         lambd = np.mean(self.lambdas).item()
         mixed_dists = [lambd * output_dists[i] / self.num_ensemble for i in range(self.num_ensemble)]
         ensemble_dist = sum(mixed_dists) 
         pub_pred = (1 - lambd) * output_dists[self.num_ensemble]
         ensemble_dist += pub_pred 
         active_set = [i for i in range(self.num_ensemble)]
-        losses = self.calc_privacy_loss(ensemble_dist-pub_pred, mixed_dists,
+        self.calc_per_inst_priv_loss(ensemble_dist-pub_pred, mixed_dists, pub_pred)
+        losses = self.calc_indiv_priv_loss(ensemble_dist-pub_pred, mixed_dists,
                                          lambd, pub_pred, active_set)
 
-        active_set = [i for i, loss in enumerate(losses) if loss < 1]
-        self.lambdas = np.array([1/2 for _ in range(self.num_ensemble)])
+        active_set = [i for i, loss in enumerate(losses) if loss < self.eps / (self.q_budget)]
+        if active_set == []:
+            return output_dists[self.num_ensemble]
+        self.lambdas = np.array([0.5 for _ in range(self.num_ensemble)])
         lambd = np.mean(self.lambdas).item()
-
-
+        mixed_dists = [lambd * output_dists[i] / len(active_set) if i in active_set else 0 for i in range(self.num_ensemble)] 
+        ensemble_dist = sum(mixed_dists)
+        pub_pred = (1 - lambd) * output_dists[self.num_ensemble]
+        ensemble_dist += pub_pred
+        losses = self.calc_indiv_priv_loss(ensemble_dist-pub_pred, mixed_dists,
+                                         lambd, pub_pred, active_set)
         return ensemble_dist
 
     def reg_pred(self, output_dists):

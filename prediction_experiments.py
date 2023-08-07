@@ -98,7 +98,7 @@ def main():
     print(f"Perplexity score for Ensemble Model: {ensemble_ppl:.2f}")
 
     priv_ensemble.print_priv_losses()
-    priv_ensemble.plot_individual_loss()
+    #priv_ensemble.plot_individual_loss()
 
 def calc_loss(logits, labels):
     shift_logits = logits[..., :-1, :].contiguous()
