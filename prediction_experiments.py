@@ -19,7 +19,7 @@ parser.add_argument("--dataset", type=str, default="wikitext")
 parser.add_argument("--data_subset", type=str, default="wikitext-103-raw-v1")
 parser.add_argument("--device", type=str, default="cuda:6")
 parser.add_argument("--seq_length", type=int, default=512)
-parser.add_argument("--query_budget", type=int, default=512)
+parser.add_argument("--query_budget", type=int, default=1024)
 
 def main():
     args = parser.parse_args()
@@ -97,6 +97,8 @@ def main():
     print(f"Perplexity score for Fine-Tuned Model: {fine_tuned_ppl:.2f}")
     print(f"Perplexity score for Ensemble Model: {ensemble_ppl:.2f}")
 
+    priv_ensemble.print_priv_losses()
+    priv_ensemble.plot_individual_loss()
 
 def calc_loss(logits, labels):
     shift_logits = logits[..., :-1, :].contiguous()
