@@ -57,7 +57,7 @@ def main():
 
     model_dir = os.path.join("models", f"{args.num_ensemble}_ensemble")
 
-    if not os.path.exits(model_dir):
+    if not os.path.exists(model_dir):
         os.mkdir(model_dir)
 
     print(f"\n\nTotal size of training dataset {len(lm_dataset['train'])}")

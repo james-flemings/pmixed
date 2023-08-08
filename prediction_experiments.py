@@ -10,7 +10,7 @@ from training_ensemble import group_texts, wiki_tokenize_function
 from peft import PeftModel
 import copy
 import tqdm
-
+import matplotlib.pyplot as plt
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--num_ensemble", type=int, default=8)
@@ -20,18 +20,21 @@ parser.add_argument("--data_subset", type=str, default="wikitext-103-raw-v1")
 parser.add_argument("--device", type=str, default="cuda:6")
 parser.add_argument("--seq_length", type=int, default=512)
 parser.add_argument("--query_budget", type=int, default=1024)
+parser.add_argument("--target_multiplier", type=float, default=1.0)
 
 def main():
     args = parser.parse_args()
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    model_dir = os.path.join("models", f"{args.num_ensemble}_ensemble")
 
-    model_paths = [os.path.join("models", f"lora-{args.model_name}-{i}-finetuned-{args.data_subset}")
+    model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-{args.data_subset}")
                     for i in range(args.num_ensemble)]
     priv_ensemble = Ensemble(model_paths,
                              args.model_name,
                              tokenizer,
                              args.device,
-                             q_budget=args.query_budget)
+                             q_budget=args.query_budget,
+                             target_mult=args.target_multiplier)
 
 
     fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.data_subset}")
@@ -89,22 +92,32 @@ def main():
         pub_neg_log_likelihood.append(calc_loss(pub_output_logits, labels))
         fine_tuned_neg_log_likelihood.append(calc_loss(fine_tuned_output_logits, labels))
 
-    pre_trained_ppl = torch.exp(torch.stack(pub_neg_log_likelihood)).mean()
-    fine_tuned_ppl = torch.exp(torch.stack(fine_tuned_neg_log_likelihood)).mean()
-    ensemble_ppl = torch.exp(torch.stack(ensemble_neg_log_likelihood)).mean()
+    pre_trained_ppl = torch.exp(torch.stack(pub_neg_log_likelihood))
+    fine_tuned_ppl = torch.exp(torch.stack(fine_tuned_neg_log_likelihood))
+    ensemble_ppl = torch.exp(torch.stack(ensemble_neg_log_likelihood))
 
-    print(f"Perplexity score for Pre-Trained Model: {pre_trained_ppl:.2f}")
-    print(f"Perplexity score for Fine-Tuned Model: {fine_tuned_ppl:.2f}")
-    print(f"Perplexity score for Ensemble Model: {ensemble_ppl:.2f}")
+    print(f"Perplexity score for Pre-Trained Model: {pre_trained_ppl.mean():.2f}")
+    print(f"Perplexity score for Fine-Tuned Model: {fine_tuned_ppl.mean():.2f}")
+    print(f"Perplexity score for Ensemble Model: {ensemble_ppl.mean():.2f}")
 
     priv_ensemble.print_priv_losses()
-    #priv_ensemble.plot_individual_loss()
+    priv_ensemble.print_lambdas()
+    priv_ensemble.plot_individual_loss()
+    priv_ensemble.plot_lambdas()
+    #plot_ppl(ensemble_ppl)
 
 def calc_loss(logits, labels):
     shift_logits = logits[..., :-1, :].contiguous()
     shift_labels = labels[..., 1:].contiguous()
     loss = nn.CrossEntropyLoss()
     return loss(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+
+def plot_ppl(ppl_scores):
+    x = [i for i in range(len(ppl_scores))]
+    plt.plot(x, ppl_scores.cpu())
+    plt.savefig(os.path.join("plt", "ensemble_perplexity_scores.png"))
+    plt.clf()
+
 
 if __name__ == "__main__":
     main()
