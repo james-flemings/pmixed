@@ -55,6 +55,11 @@ def main():
     if not os.path.exists("models"):
         os.mkdir("models")
 
+    model_dir = os.path.join("models", f"{args.num_ensemble}_ensemble")
+
+    if not os.path.exits(model_dir):
+        os.mkdir(model_dir)
+
     print(f"\n\nTotal size of training dataset {len(lm_dataset['train'])}")
 
     for i in range(START, args.num_ensemble):
@@ -80,9 +85,9 @@ def main():
 
         output_dir = 0
         if args.num_ensemble == 1:
-            output_dir = os.path.join("models", f"constrained-lora-{args.model_name}-finetuned-{args.subset}")
+            output_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.subset}")
         else:
-            output_dir = os.path.join("models",
+            output_dir = os.path.join(model_dir,
                                     f"lora-{args.model_name}-{i}-finetuned-{args.subset}")
 
         train_args = TrainingArguments(

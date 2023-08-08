@@ -92,7 +92,9 @@ class Ensemble():
             q = copy.deepcopy(pub_pred)
             r[ind] += (N-1) / N * lambd 
             q[ind] += lambd
-            loss = Ensemble.renyiDiv(r, q, self.alpha).cpu()
+            loss = max(Ensemble.renyiDiv(r, q, self.alpha).cpu(),
+                       Ensemble.renyiDiv(q, r, self.alpha).cpu()
+            )
             self.personalized_priv_loss[i].append(loss)
             losses.append(loss)
         return losses
@@ -110,8 +112,8 @@ class Ensemble():
         losses = self.calc_indiv_priv_loss(ensemble_dist-pub_pred, mixed_dists,
                                          lambd, pub_pred, active_set)
 
-        active_set = [i for i, loss in enumerate(losses) if loss < self.eps / (self.q_budget)]
-        if active_set == []:
+        active_set = [i for i, loss in enumerate(losses) if loss < self.eps / (2 * self.q_budget)]
+        if len(active_set) <= self.num_ensemble/2:
             return output_dists[self.num_ensemble]
         self.lambdas = np.array([0.5 for _ in range(self.num_ensemble)])
         lambd = np.mean(self.lambdas).item()
@@ -121,6 +123,9 @@ class Ensemble():
         ensemble_dist += pub_pred
         losses = self.calc_indiv_priv_loss(ensemble_dist-pub_pred, mixed_dists,
                                          lambd, pub_pred, active_set)
+        if any([loss > 0.1 for loss in losses]):
+            print(losses)
+
         return ensemble_dist
 
     def reg_pred(self, output_dists):
