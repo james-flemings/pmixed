@@ -27,6 +27,7 @@ parser.add_argument("--block_size", type=int, default=512)
 parser.add_argument("--learning_rate", type=float, default=2e-4)
 parser.add_argument("--weight_decay", type=float, default=0.01)
 parser.add_argument("--batch_size", type=int, default=8)
+parser.add_argument("--training_type", type=str, default="sub-samp-and-agg")
 
 START = 0 
 
