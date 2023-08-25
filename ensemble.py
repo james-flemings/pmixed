@@ -93,7 +93,7 @@ class Ensemble():
                                                     output_dists[self.num_ensemble].cpu(),
                                                     i
                                                     ) for i in range(self.num_ensemble)]
-        #self.lambdas = [0 for _ in range(self.num_ensemble)]
+        #self.lambdas = [0.99 for _ in range(self.num_ensemble)]
         self.lambda_history.append(np.mean(self.lambdas))
         mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[i])
                        for i in range(self.num_ensemble)]
