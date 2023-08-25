@@ -76,36 +76,50 @@ class Ensemble():
                                               Ensemble.renyiDiv(q, r, self.alpha)
                                               )
 
-    def calc_indiv_priv_loss(self, out_dist, pub_pred, N, lambd):
-        return max(torch.log(torch.max(lambd + pub_pred)) -
-                   torch.log(torch.max(lambd * ((N-1)/N + out_dist/N) + pub_pred)),
-                   torch.log(torch.max(lambd/N * out_dist + pub_pred)) -
-                   torch.log(torch.max(pub_pred)) 
-                   )**2
+    def calc_indiv_priv_loss(self, mix_dist, pub_pred, i, lambd):
+        #return max(torch.log(torch.max(lambd + pub_pred)) -
+        #           torch.log(torch.max(lambd * ((N-1)/N + out_dist/N) + pub_pred)),
+        #           torch.log(torch.max(lambd/N * out_dist + pub_pred)) -
+        #           torch.log(torch.max(pub_pred)) 
+        #           )**2
+        return max(torch.log(torch.max(mix_dist)) - 
+                   torch.log(torch.max((1 - lambd) * pub_pred)), 
+                   torch.log(torch.max((1 - lambd) * pub_pred)) -
+                   torch.log(torch.max(mix_dist))
+                )**2
 
     def priv_pred(self, output_dists):
-        #self.lambdas = [self.lambda_solver_bisection(output_dists[i].cpu(),
-        #                                            output_dists[self.num_ensemble].cpu(),
-        #                                            self.num_ensemble
-        #                                            ) for i in range(self.num_ensemble)]
-        lambd = 1/4 
+        self.lambdas = [self.lambda_solver_bisection(output_dists[i].cpu(),
+                                                    output_dists[self.num_ensemble].cpu(),
+                                                    i
+                                                    ) for i in range(self.num_ensemble)]
+        #self.lambdas = [0 for _ in range(self.num_ensemble)]
+        self.lambda_history.append(np.mean(self.lambdas))
+        mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[i])
+                       for i in range(self.num_ensemble)]
 
-        mixed_dists = torch.stack(output_dists[:-1])
-        ensemble_dist = lambd * torch.mean(mixed_dists, dim=0) 
-        pub_pred = (1-lambd) * output_dists[self.num_ensemble]
-        N = len(mixed_dists)
-        losses = [self.calc_indiv_priv_loss(out_dist, pub_pred, N, lambd)
-                   for out_dist in output_dists[:-1]]
+        #mixed_dists = [self.lambdas[i] * output_dists[i] +
+        #               (1 - self.lambdas[i]) * output_dist[self.num_ensemble]
+        #                for i in range(self.num_ensemble)]
+
+        mixed_dists = torch.stack(mixed_dists)
+        ensemble_dist = torch.mean(mixed_dists, dim=0) 
+        pub_pred = output_dists[self.num_ensemble]
+        #N = len(mixed_dists)
+        losses = [self.calc_indiv_priv_loss(mix_dist, pub_pred, i, self.lambdas[i])
+                   for i, mix_dist in enumerate(mixed_dists)]
         
         for i, loss in enumerate(losses):
             self.personalized_priv_loss[i].append(loss.cpu())
+        
+        return ensemble_dist
+        '''
 
-        ''' 
         if any(loss > self.target for loss in losses):
             self.lambda_history.append(lambd)
-            return pub_pred
- 
-        lambd = 1/4 
+            return (ensemble_dist + pub_pred)
+
+        lambd = 3/4 
         self.lambda_history.append(lambd)
 
         mixed_dists = torch.stack(output_dists[:-1])
@@ -118,35 +132,21 @@ class Ensemble():
         for i, loss in enumerate(losses):
             self.personalized_priv_loss[i].append(loss.cpu())
         '''
-        return (ensemble_dist + pub_pred)
 
-    def priv_pred_pairing(self, output_dists):
-        #mixed_dists = [lambd * (output_dists[i] + output_dists[j]) / (self.num_ensemble) 
-        #                for i, j in self.pairings]
-        #ensemble_dist = sum(mixed_dists) 
-        #ensemble_dist += pub_pred 
-        #self.calc_per_inst_priv_loss(ensemble_dist-pub_pred, mixed_dists, lambd, pub_pred)
-        #losses = self.calc_indiv_priv_loss(ensemble_dist-pub_pred, mixed_dists,
-        #                                 lambd, pub_pred, active_set)
-        pass
-
-    
-    def lambda_solver_bisection(self, p, pub_pred, N):
+    def lambda_solver_bisection(self, p, pub_pred, i):
         def f(lambd):
-            p_mix = self.mix(p, pub_pred, N, lambd)
-            eps = self.calc_indiv_priv_loss(p_mix, pub_pred, N)
-            return eps - self.target 
-        if f(0) > 0.0:
-            lambd = 0 
-        elif f(1) <= 0.0:
-            lambd = 1
+            p_mix = self.mix(p, pub_pred, lambd)
+            eps = self.calc_indiv_priv_loss(p_mix, pub_pred, i, lambd)
+            return (eps - self.target)
+
+        if f(0.99) <= 0.0:
+            lambd = 0.99 
         else:
-            lambd = bisect(f, 0, 1, maxiter=10, disp=False)
+            lambd = bisect(f, 0, 0.99, maxiter=10, disp=False)
         return lambd
 
-    def mix(self, p, p_prime, N, lambd=0.5):
-        mix_out = (lambd * p + (1-lambd) * p_prime) / N
-        return mix_out
+    def mix(self, p, p_prime, lambd=0.5):
+        return (lambd * p + (1-lambd) * p_prime)
 
 
     def reg_pred(self, output_dists):
