@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader
 from torcheval.metrics.text import Perplexity
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import os 
@@ -21,6 +22,7 @@ parser.add_argument("--device", type=str, default="cuda:6")
 parser.add_argument("--seq_length", type=int, default=512)
 parser.add_argument("--query_budget", type=int, default=1024)
 parser.add_argument("--target_multiplier", type=float, default=1.0)
+parser.add_argument("--epsilon", type=float, default=2.0)
 
 def main():
     args = parser.parse_args()
@@ -34,6 +36,7 @@ def main():
                              tokenizer,
                              args.device,
                              q_budget=args.query_budget,
+                             eps=args.epsilon,
                              target_mult=args.target_multiplier)
 
 
@@ -67,15 +70,16 @@ def main():
     pub_neg_log_likelihood = []
     fine_tuned_neg_log_likelihood = []
     ensemble_neg_log_likelihood= []
+    test_loader = DataLoader(test_data)
 
-    for i in tqdm.tqdm(range(len(test_data))):
-        data = test_data[i]['input_ids'].to(args.device)
-        labels = test_data[i]['labels'].to(args.device)
+    for i, data in enumerate(tqdm.tqdm(test_loader)):
+        labels = data['labels'].to(args.device)
+        input_ids = data['input_ids'].to(args.device)
         with torch.no_grad():
-            pub_output_logits = priv_ensemble.pub_model(data, labels=labels).logits
-            fine_tuned_output_logits = fine_tuned_model(data, labels=labels).logits
+            pub_output_logits = priv_ensemble.pub_model(input_ids).logits
+            fine_tuned_output_logits = fine_tuned_model(input_ids).logits
             
-            output_dists = priv_ensemble.pred_dist(data)
+            output_dists = priv_ensemble.pred_dist(input_ids)
             ensemble_logits = []
 
             if i < args.query_budget // seq_length:
