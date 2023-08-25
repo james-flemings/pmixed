@@ -56,13 +56,26 @@ def main():
     if not os.path.exists("models"):
         os.mkdir("models")
 
-    model_dir = os.path.join("models", f"{args.num_ensemble}_ensemble")
+    if args.num_ensemble == 1:
+        model_dir = "models"
+    else:
+        model_dir = os.path.join("models", f"{args.num_ensemble}_ensemble")
 
     if not os.path.exists(model_dir):
         os.mkdir(model_dir)
 
     print(f"\n\nTotal size of training dataset {len(lm_dataset['train'])}")
 
+    if args.training_type == "sub-samp-and-agg":
+        train_ensemble(args, lm_dataset, model_dir, pretrained_model)
+    elif args.training_type == "dpsgd":
+        dpsgd(args, lm_dataset, model_dir, pretrained_model)
+
+
+def dpsgd(args, lm_dataset, model_dir, pretrained_model):
+    pass
+
+def train_ensemble(args, lm_dataset, model_dir, pretrained_model):
     for i in range(START, args.num_ensemble):
         lm_shards = {} 
         if args.num_ensemble == 1:
@@ -86,7 +99,7 @@ def main():
 
         output_dir = 0
         if args.num_ensemble == 1:
-            output_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.subset}")
+            output_dir = os.path.join(model_dir, f"lora-{args.model_name}-finetuned-{args.subset}")
         else:
             output_dir = os.path.join(model_dir,
                                     f"lora-{args.model_name}-{i}-finetuned-{args.subset}")
