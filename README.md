@@ -9,3 +9,7 @@ torchrun --nproc_per_node=num_gpus training_ensemble.py
 ```
 
 where num_gpus is the total number of gpus you currently have.
+
+```bash
+torchrun --nproc_per_node=num_gpus training_ensemble.py --training_type="dpsgd" 
+```
