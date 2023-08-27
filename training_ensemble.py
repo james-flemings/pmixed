@@ -5,6 +5,9 @@ import torch.optim as optim
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from opacus.distributed import DifferentiallyPrivateDistributedDataParallel as DPDDP
+from opacus.optimizers import DistributedDPOptimizer
+from opacus.data_loader import DPDataLoader
+from opacus.utils.batch_memory_manager import BatchMemoryManager
 from opacus import PrivacyEngine
 import os
 import math
@@ -14,6 +17,7 @@ from datasets import load_dataset
 from tqdm import tqdm
 import numpy as np
 import argparse
+import tqdm
 
 set_seed(0)
 
@@ -35,10 +39,13 @@ parser.add_argument("--device", type=str, default="cuda:0")
 parser.add_argument("--noise_multiplier", type=float, default=1.)
 parser.add_argument("--max_grad_norm", type=float, default=1.)
 parser.add_argument("--epsilon", type=float, default=1.)
+parser.add_argument("--delta", type=float, default=1e-5)
+parser.add_argument("--num_gpus", type=int, default=1)
+
 
 args = parser.parse_args()
 
-START = 7 
+START = 0 
 if not os.path.exists("models"):
     os.mkdir("models")
 if args.num_ensemble == 1:
@@ -149,6 +156,17 @@ def init_dp_training(rank):
     lora_model = get_peft_model(pretrained_model, lora_config)
     model = DPDDP(lora_model)
     optimizer = optim.SGD(model.parameters(), lr=args.learning_rate)
+    '''
+    optimizer = DistributedDPOptimizer(
+        optimizer=optimizer,
+        noise_multiplier=0.,
+        max_grad_norm=100.,
+        expected_batch_size=args.batch_size//world_size,
+    )
+    '''
+    lm_dataset['train'].set_format(type='torch')
+    lm_dataset['validation'].set_format(type='torch')
+
     train_data_loader = DataLoader(
         lm_dataset['train'],
         batch_size=args.batch_size
@@ -160,13 +178,13 @@ def init_dp_training(rank):
     )
 
     privacy_engine = PrivacyEngine(accountant="rdp")
-    model, optimizer, data_loader = privacy_engine.make_private(
+    model, optimizer, train_data_loader = privacy_engine.make_private_with_epsilon(
         module=model,
         optimizer=optimizer,
-        data_loader=data_loader,
+        data_loader=train_data_loader,
         target_epsilon=args.epsilon,
-        target_delta=0,
-        epochs=args.epochs
+        target_delta=args.delta,
+        epochs=args.epochs,
         max_grad_norm=args.max_grad_norm,
         #noise_multiplier=args.noise_multiplier,
     )
@@ -181,72 +199,57 @@ def dpsgd(rank, world_size):
 
     for e in range(args.epochs):
         losses = []
-        correct = 0
-        total = 0
-        for data, target in train_data_loader:
-            data, target = data.to(rank), target
-            optimizer.zero_grad()
-            output = model(data)
+        with BatchMemoryManager(
+        data_loader=train_data_loader, 
+        max_physical_batch_size=args.batch_size, 
+        optimizer=optimizer
+        ) as memory_safe_data_loader:
+            for data in tqdm.tqdm(memory_safe_data_loader):
+                input_ids, labels = data['input_ids'].to(rank), data['labels'].to(rank)
+                optimizer.zero_grad()
+                output = model(input_ids, labels=labels)
 
-            pred = output.argmax(dim=1, keepdim=True)
-            pred = output.argmax(dim=1, keepdim=True)
-            correct += pred.eq(target.view_as(pred)).sum().item()
-            total += len(data)
+                loss, logits = output[0], output[1]
+
+                #loss = criterion(output, labels)
+                loss.backward()
+                optimizer.step()
+                losses.append(loss.item())
             
-            loss = criterion(output, target)
-            loss.backward()
-            optimizer.step()
-            losses.append(loss.item())
-        
-        test_accuracy = evaluate(model, val_data_loader, rank)
-        train_accuracy = correct / total
-        epsilon = privacy_engine.get_epsilon()
-        
-        if rank == 0:
-            print(
-                f"Epoch: {e} \t"
-                f"Train Loss: {np.mean(losses):.4f} | "
-                f"Train Accuracy: {train_accuracy:.2f} | "
-                f"Test Accuracy: {test_accuracy:.2f} |"
-                f"(ε = {epsilon:.2f})"
-            )
-
+            val_losses = evaluate(model, val_data_loader, rank, criterion)
+            epsilon = privacy_engine.get_epsilon(delta=args.delta)
+            
+            if rank == 0:
+                print(
+                    f"Epoch: {e} \t"
+                    f"Train Loss: {np.mean(losses):.4f} | "
+                    f"Validation Loss: {np.mean(val_losses):.4f} | "
+                    f"(ε = {epsilon:.2f})"
+                )
     cleanup()    
+    output_dir = os.path.join(model_dir, f"lora-{args.model_name}-dp-finetuned-{args.subset}")
+    model.save_pretrained(output_dir)
 
 def accuracy(preds, labels):
     return (preds == labels).mean()
 
 # define evaluation cycle
-def evaluate(model, test_dataloader, device):    
+def evaluate(model, test_dataloader, device, criterion):    
     model.eval()
+    losses = []
 
-    loss_arr = []
-    accuracy_arr = []
-    
-    for batch in test_dataloader:
-        batch = tuple(t.to(device) for t in batch)
+    with torch.no_grad():
+        for data in test_dataloader:
+            input_ids, labels = data['input_ids'].to(device), data['labels'].to(device)
+            loss = model(input_ids).loss
+            losses.append(loss)
 
-        with torch.no_grad():
-            inputs = {'input_ids':      batch[0],
-                      'attention_mask': batch[1],
-                      'token_type_ids': batch[2],
-                      'labels':         batch[3]}
-
-            outputs = model(**inputs)
-            loss, logits = outputs[:2]
-            
-            preds = np.argmax(logits.detach().cpu().numpy(), axis=1)
-            labels = inputs['labels'].detach().cpu().numpy()
-            
-            loss_arr.append(loss.item())
-            accuracy_arr.append(accuracy(preds, labels))
-    
     model.train()
-    return np.mean(loss_arr), np.mean(accuracy_arr) 
+    return losses
 
 def setup(rank, world_size):
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '29500'
 
     # initialize the process group
     dist.init_process_group("gloo", rank=rank, world_size=world_size)
@@ -268,7 +271,8 @@ def print_trainable_parameters(model):
     f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
     )
 
-world_size = torch.cuda.device_count()
+world_size = args.num_gpus
+
 
 if __name__ == "__main__":
     if args.training_type == "sub-samp-and-agg":
@@ -276,7 +280,7 @@ if __name__ == "__main__":
     elif args.training_type == "dpsgd":
         mp.spawn(
             dpsgd,
-            args=(world_size),
+            args=(world_size,),
             nprocs=world_size,
             join=True
         )

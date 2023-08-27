@@ -8,8 +8,8 @@ To run the code, use the following command:
 torchrun --nproc_per_node=num_gpus training_ensemble.py
 ```
 
-where num_gpus is the total number of gpus you currently have.
+To reproduce dpsgd results, 
 
 ```bash
-torchrun --nproc_per_node=num_gpus training_ensemble.py --training_type="dpsgd" 
+torchrun --nproc_per_node=num_gpus training_ensemble.py --training_type="dpsgd" --num_gpus=num_gpus 
 ```
