@@ -48,7 +48,7 @@ args = parser.parse_args()
 START = 0 
 if not os.path.exists("models"):
     os.mkdir("models")
-if args.num_ensemble == 1:
+if args.num_ensemble == 1 or args.training_type == "dpsgd":
     model_dir = "models"
 else:
     model_dir = os.path.join("models", f"{args.num_ensemble}_ensemble")
@@ -210,8 +210,6 @@ def dpsgd(rank, world_size):
                 output = model(input_ids, labels=labels)
 
                 loss, logits = output[0], output[1]
-
-                #loss = criterion(output, labels)
                 loss.backward()
                 optimizer.step()
                 losses.append(loss.item())
@@ -227,8 +225,8 @@ def dpsgd(rank, world_size):
                     f"(ε = {epsilon:.2f})"
                 )
     cleanup()    
-    output_dir = os.path.join(model_dir, f"lora-{args.model_name}-dp-finetuned-{args.subset}")
-    model.save_pretrained(output_dir)
+    output_dir = os.path.join(model_dir, f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.subset}")
+    torch.save(model._module.state_dict(), output_dir)
 
 def accuracy(preds, labels):
     return (preds == labels).mean()
@@ -241,8 +239,8 @@ def evaluate(model, test_dataloader, device, criterion):
     with torch.no_grad():
         for data in test_dataloader:
             input_ids, labels = data['input_ids'].to(device), data['labels'].to(device)
-            loss = model(input_ids).loss
-            losses.append(loss)
+            output = model(input_ids, labels=labels)
+            losses.append(output[0].item())
 
     model.train()
     return losses
