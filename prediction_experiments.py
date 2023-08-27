@@ -44,6 +44,7 @@ def main():
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
+    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
 
     seq_length = 512
     dataset = load_dataset(args.dataset, args.data_subset)
@@ -68,6 +69,7 @@ def main():
 
     pub_neg_log_likelihood = []
     fine_tuned_neg_log_likelihood = []
+    dp_fine_tuned_neg_log_likelihood = []
     ensemble_neg_log_likelihood= []
     test_loader = DataLoader(test_data)
 
@@ -77,6 +79,7 @@ def main():
         with torch.no_grad():
             pub_output_logits = priv_ensemble.pub_model(input_ids).logits
             fine_tuned_output_logits = fine_tuned_model(input_ids).logits
+            dp_fine_tuned_output_logits = dp_fine_tuned_model(input_ids).logits
             
             output_dists = priv_ensemble.pred_dist(input_ids)
             ensemble_logits = []
@@ -94,13 +97,16 @@ def main():
 
         pub_neg_log_likelihood.append(calc_loss(pub_output_logits, labels))
         fine_tuned_neg_log_likelihood.append(calc_loss(fine_tuned_output_logits, labels))
+        dp_fine_tuned_neg_log_likelihood.append(calc_loss(dp_fine_tuned_output_logits, labels))
 
     pre_trained_ppl = torch.exp(torch.stack(pub_neg_log_likelihood))
     fine_tuned_ppl = torch.exp(torch.stack(fine_tuned_neg_log_likelihood))
+    dp_fine_tuned_ppl = torch.exp(torch.stack(dp_fine_tuned_neg_log_likelihood))
     ensemble_ppl = torch.exp(torch.stack(ensemble_neg_log_likelihood))
 
     print(f"Perplexity score for Pre-Trained Model: {pre_trained_ppl.mean():.2f}")
     print(f"Perplexity score for Fine-Tuned Model: {fine_tuned_ppl.mean():.2f}")
+    print(f"Perplexity score for DP-Fine-Tuned Model: {dp_fine_tuned_ppl.mean():.2f}")
     print(f"Perplexity score for Ensemble Model: {ensemble_ppl.mean():.2f}")
 
     priv_ensemble.print_priv_losses()

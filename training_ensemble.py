@@ -213,20 +213,20 @@ def dpsgd(rank, world_size):
                 loss.backward()
                 optimizer.step()
                 losses.append(loss.item())
-            
-            val_losses = evaluate(model, val_data_loader, rank, criterion)
+
+            #val_losses = evaluate(model, val_data_loader, rank, criterion)
             epsilon = privacy_engine.get_epsilon(delta=args.delta)
             
             if rank == 0:
                 print(
                     f"Epoch: {e} \t"
                     f"Train Loss: {np.mean(losses):.4f} | "
-                    f"Validation Loss: {np.mean(val_losses):.4f} | "
+                    #f"Validation Loss: {np.mean(val_losses):.4f} | "
                     f"(ε = {epsilon:.2f})"
                 )
     cleanup()    
-    output_dir = os.path.join(model_dir, f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.subset}")
-    torch.save(model._module.state_dict(), output_dir)
+    output_dir = os.path.join(model_dir, f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.subset}.pt")
+    torch.save(model._module, output_dir)
 
 def accuracy(preds, labels):
     return (preds == labels).mean()
