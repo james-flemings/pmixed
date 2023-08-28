@@ -11,6 +11,8 @@ from peft import PeftModel
 import copy
 import tqdm
 import matplotlib.pyplot as plt
+from scipy.optimize import bisect
+import numpy as np
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--num_ensemble", type=int, default=8)
@@ -30,21 +32,25 @@ def main():
 
     model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-{args.data_subset}")
                     for i in range(args.num_ensemble)]
-    priv_ensemble = Ensemble(model_paths,
-                             args.model_name,
-                             tokenizer,
-                             args.device,
-                             q_budget=args.query_budget,
-                             eps=args.epsilon,
-                             target_mult=args.target_multiplier)
+    #priv_ensemble = Ensemble(model_paths,
+    #                         args.model_name,
+    #                         tokenizer,
+    #                         args.device,
+    #                         q_budget=args.query_budget,
+    #                         eps=args.epsilon,
+    #                         target_mult=args.target_multiplier)
 
+    pub_model = AutoModelForCausalLM.from_pretrained(args.model_name,
+                                                    pad_token_id=tokenizer.eos_token_id).to(
+                                                    args.device)
 
     fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.data_subset}")
-    fine_tuned_model = PeftModel.from_pretrained(copy.deepcopy(priv_ensemble.pub_model),
+    fine_tuned_model = PeftModel.from_pretrained(copy.deepcopy(pub_model),
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
-    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
+    #dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
+    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-1.0-dp-finetuned-{args.data_subset}.pt")).to(args.device)
 
     seq_length = 512
     dataset = load_dataset(args.dataset, args.data_subset)
@@ -71,27 +77,43 @@ def main():
     fine_tuned_neg_log_likelihood = []
     dp_fine_tuned_neg_log_likelihood = []
     ensemble_neg_log_likelihood= []
+    priv_neg_log_likelihood= []
     test_loader = DataLoader(test_data)
+    priv_loss = []
+    lambdas = []
+    left_over = 0
+    target = args.epsilon / args.query_budget
 
     for i, data in enumerate(tqdm.tqdm(test_loader)):
         labels = data['labels'].to(args.device)
         input_ids = data['input_ids'].to(args.device)
         with torch.no_grad():
-            pub_output_logits = priv_ensemble.pub_model(input_ids).logits
+            pub_output_logits = pub_model(input_ids).logits
             fine_tuned_output_logits = fine_tuned_model(input_ids).logits
             dp_fine_tuned_output_logits = dp_fine_tuned_model(input_ids).logits
+            fine_tuned_output_softmax = nn.functional.softmax(fine_tuned_output_logits.squeeze())
+            pub_output_softmax = nn.functional.softmax(pub_output_logits.squeeze())
             
-            output_dists = priv_ensemble.pred_dist(input_ids)
+            #output_dists = priv_ensemble.pred_dist(input_ids)
             ensemble_logits = []
+            priv_logits = []
 
             if i < args.query_budget // seq_length:
                 for j in range(seq_length):
-                    token_softmax = [output_dist[j] for output_dist in output_dists]
-                    ensemble_output_dist = priv_ensemble.priv_pred(token_softmax)
-                    ensemble_logits.append(torch.log(ensemble_output_dist))
+                    #token_softmax = [output_dist[j] for output_dist in output_dists]
+                    #ensemble_output_dist = priv_ensemble.priv_pred(token_softmax)
+                    #ensemble_logits.append(torch.log(ensemble_output_dist))
+                    priv_pred, loss, lambd = private_pred(fine_tuned_output_softmax[j], pub_output_softmax[j],
+                                             (target + left_over))
+                    left_over += (target - loss)
+                    priv_logits.append(torch.log(priv_pred))
+                    priv_loss.append(loss)
+                    lambdas.append(lambd)
 
-                ensemble_logits = torch.stack(ensemble_logits)
-                ensemble_neg_log_likelihood.append(calc_loss(ensemble_logits, labels))
+                #ensemble_logits = torch.stack(ensemble_logits)
+                #ensemble_neg_log_likelihood.append(calc_loss(ensemble_logits, labels))
+                priv_logits = torch.stack(priv_logits)
+                priv_neg_log_likelihood.append(calc_loss(priv_logits, labels))
             else:
                 break
 
@@ -102,17 +124,21 @@ def main():
     pre_trained_ppl = torch.exp(torch.stack(pub_neg_log_likelihood))
     fine_tuned_ppl = torch.exp(torch.stack(fine_tuned_neg_log_likelihood))
     dp_fine_tuned_ppl = torch.exp(torch.stack(dp_fine_tuned_neg_log_likelihood))
-    ensemble_ppl = torch.exp(torch.stack(ensemble_neg_log_likelihood))
+    #ensemble_ppl = torch.exp(torch.stack(ensemble_neg_log_likelihood))
+    priv_ppl = torch.exp(torch.stack(priv_neg_log_likelihood))
 
     print(f"Perplexity score for Pre-Trained Model: {pre_trained_ppl.mean():.2f}")
     print(f"Perplexity score for Fine-Tuned Model: {fine_tuned_ppl.mean():.2f}")
     print(f"Perplexity score for DP-Fine-Tuned Model: {dp_fine_tuned_ppl.mean():.2f}")
-    print(f"Perplexity score for Ensemble Model: {ensemble_ppl.mean():.2f}")
+    print(f"Perplexity score for Private Prediction Model: {priv_ppl.mean():.2f}")
 
-    priv_ensemble.print_priv_losses()
-    priv_ensemble.print_lambdas()
-    priv_ensemble.plot_individual_loss()
-    priv_ensemble.plot_lambdas()
+    print(f"Total privacy loss of model: {np.sum(priv_loss):.4f}")
+    print(f"Average lambda value: {np.mean(lambdas):.4f}")
+
+    #priv_ensemble.print_priv_losses()
+    #priv_ensemble.print_lambdas()
+    #priv_ensemble.plot_individual_loss()
+    #priv_ensemble.plot_lambdas()
     #plot_ppl(ensemble_ppl)
 
 def calc_loss(logits, labels):
@@ -127,6 +153,27 @@ def plot_ppl(ppl_scores):
     plt.savefig(os.path.join("plt", "ensemble_perplexity_scores.png"))
     plt.clf()
 
+def private_pred(priv_model, pub_model, target):
+    lambd = lambda_solver_bisection(pub_model.cpu(), target)
+    loss = calc_indiv_priv_loss(pub_model, lambd)
+    pred = lambd * priv_model + (1-lambd) * pub_model
+    return pred, loss.cpu(), lambd
+
+def lambda_solver_bisection(pub_pred, target):
+    def f(lambd):
+        eps = calc_indiv_priv_loss(pub_pred, lambd)
+        return (eps - target)
+
+    if f(0.99) <= 0.0:
+        lambd = 0.99 
+    else:
+        lambd = bisect(f, 0, 0.99, maxiter=10, disp=False)
+    return lambd
+
+def calc_indiv_priv_loss(pub_pred, lambd):
+    return torch.log((lambd + (1-lambd) * torch.max(pub_pred)) / 
+                      ((1-lambd) * torch.max(pub_pred)) 
+                      )**2
 
 if __name__ == "__main__":
     main()

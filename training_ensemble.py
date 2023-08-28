@@ -34,10 +34,11 @@ parser.add_argument("--block_size", type=int, default=512)
 parser.add_argument("--learning_rate", type=float, default=2e-4)
 parser.add_argument("--weight_decay", type=float, default=0.01)
 parser.add_argument("--batch_size", type=int, default=8)
+parser.add_argument("--dp_batch_size", type=int, default=32)
 parser.add_argument("--training_type", type=str, default="sub-samp-and-agg")
 parser.add_argument("--device", type=str, default="cuda:0")
 parser.add_argument("--noise_multiplier", type=float, default=1.)
-parser.add_argument("--max_grad_norm", type=float, default=1.)
+parser.add_argument("--max_grad_norm", type=float, default=0.1)
 parser.add_argument("--epsilon", type=float, default=1.)
 parser.add_argument("--delta", type=float, default=1e-5)
 parser.add_argument("--num_gpus", type=int, default=1)
@@ -155,7 +156,7 @@ def init_dp_training(rank):
     )
     lora_model = get_peft_model(pretrained_model, lora_config)
     model = DPDDP(lora_model)
-    optimizer = optim.SGD(model.parameters(), lr=args.learning_rate)
+    optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, )
     '''
     optimizer = DistributedDPOptimizer(
         optimizer=optimizer,
@@ -169,12 +170,12 @@ def init_dp_training(rank):
 
     train_data_loader = DataLoader(
         lm_dataset['train'],
-        batch_size=args.batch_size
+        batch_size=args.dp_batch_size
     )
 
     val_data_loader = DataLoader(
         lm_dataset['validation'],
-        batch_size=args.batch_size
+        batch_size=args.dp_batch_size
     )
 
     privacy_engine = PrivacyEngine(accountant="rdp")
@@ -193,7 +194,6 @@ def init_dp_training(rank):
 def dpsgd(rank, world_size):
     setup(rank, world_size)
     model, optimizer, train_data_loader, val_data_loader, privacy_engine = init_dp_training(rank)
-    criterion = nn.CrossEntropyLoss()
     model.to(rank)
     model.train()
 

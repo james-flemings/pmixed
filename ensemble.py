@@ -77,35 +77,31 @@ class Ensemble():
                                               )
 
     def calc_indiv_priv_loss(self, mix_dist, pub_pred, i, lambd):
-        #return max(torch.log(torch.max(lambd + pub_pred)) -
-        #           torch.log(torch.max(lambd * ((N-1)/N + out_dist/N) + pub_pred)),
-        #           torch.log(torch.max(lambd/N * out_dist + pub_pred)) -
-        #           torch.log(torch.max(pub_pred)) 
-        #           )**2
-        return max(torch.log(torch.max(mix_dist)) - 
-                   torch.log(torch.max((1 - lambd) * pub_pred)), 
-                   torch.log(torch.max((1 - lambd) * pub_pred)) -
-                   torch.log(torch.max(mix_dist))
-                )**2
+        p, p_i = torch.max((1-lambd) * pub_pred, 0)
+        q, q_i = torch.max(mix_dist, 0)
+        p, i = torch.max((lambd + (1-lambd) * pub_pred) / ((1-lambd) * pub_pred), 0)
+        val, indx = torch.max((pub_pred), 0)
+        print(i, indx)
+        loss = torch.log(p)**2
+        return loss
+        #return torch.log(torch.max((lambd + (1-lambd) * pub_pred) / ((1-lambd) * pub_pred)))
 
     def priv_pred(self, output_dists):
-        self.lambdas = [self.lambda_solver_bisection(output_dists[i].cpu(),
-                                                    output_dists[self.num_ensemble].cpu(),
-                                                    i
-                                                    ) for i in range(self.num_ensemble)]
-        #self.lambdas = [0.99 for _ in range(self.num_ensemble)]
+        #self.lambdas = [self.lambda_solver_bisection(output_dists[i].cpu(),
+        #                                            output_dists[self.num_ensemble].cpu(),
+        #                                            i
+        #                                            ) for i in range(self.num_ensemble)]
+        #self.lambdas = [self.get_lambdas(output_dists[i], output_dists[self.num_ensemble]
+        #                                ) for i in range(self.num_ensemble)]
+        self.lambdas = [0.02 for _ in range(self.num_ensemble)]
+        #self.lambda_history.append(torch.mean(torch.stack(self.lambdas)).cpu().item())
         self.lambda_history.append(np.mean(self.lambdas))
         mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[i])
                        for i in range(self.num_ensemble)]
 
-        #mixed_dists = [self.lambdas[i] * output_dists[i] +
-        #               (1 - self.lambdas[i]) * output_dist[self.num_ensemble]
-        #                for i in range(self.num_ensemble)]
-
         mixed_dists = torch.stack(mixed_dists)
         ensemble_dist = torch.mean(mixed_dists, dim=0) 
         pub_pred = output_dists[self.num_ensemble]
-        #N = len(mixed_dists)
         losses = [self.calc_indiv_priv_loss(mix_dist, pub_pred, i, self.lambdas[i])
                    for i, mix_dist in enumerate(mixed_dists)]
         
@@ -113,25 +109,16 @@ class Ensemble():
             self.personalized_priv_loss[i].append(loss.cpu())
         
         return ensemble_dist
-        '''
 
-        if any(loss > self.target for loss in losses):
-            self.lambda_history.append(lambd)
-            return (ensemble_dist + pub_pred)
-
-        lambd = 3/4 
-        self.lambda_history.append(lambd)
-
-        mixed_dists = torch.stack(output_dists[:-1])
-        ensemble_dist = lambd * torch.mean(mixed_dists, dim=0) 
-        pub_pred = (1-lambd) * output_dists[self.num_ensemble]
-        N = len(mixed_dists)
-        losses = [self.calc_indiv_priv_loss(out_dist, pub_pred, N, lambd)
-                   for out_dist in output_dists[:-1]]
-        
-        for i, loss in enumerate(losses):
-            self.personalized_priv_loss[i].append(loss.cpu())
-        '''
+    def get_lambdas(self, p, pub_pred):
+        lambda_1 = torch.max(((np.exp(np.sqrt(self.target)) - 1) * pub_pred) /
+                             ((np.exp(np.sqrt(self.target)) - 1) * pub_pred + p))
+        lambda_2 = torch.max(((np.exp(np.sqrt(self.target)) - 1) * pub_pred) / 
+                             ((np.exp(np.sqrt(self.target)) - 1) * pub_pred -
+                               np.exp(np.sqrt(self.target)) * p - 1))   
+        if lambda_1 == 1. or lambda_2 == 1.:
+            return torch.tensor(0.99).to(self.device)
+        return torch.min(lambda_1, lambda_2)
 
     def lambda_solver_bisection(self, p, pub_pred, i):
         def f(lambd):
