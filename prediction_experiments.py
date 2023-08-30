@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import os 
@@ -23,7 +24,9 @@ parser.add_argument("--device", type=str, default="cuda:6")
 parser.add_argument("--seq_length", type=int, default=512)
 parser.add_argument("--query_budget", type=int, default=1024)
 parser.add_argument("--target_multiplier", type=float, default=1.0)
-parser.add_argument("--epsilon", type=float, default=2.0)
+parser.add_argument("--epsilon", type=float, default=1.0)
+parser.add_argument("--temperature", type=float, default=1.0)
+parser.add_argument("--p_value", type=float, default=1.0)
 
 def main():
     args = parser.parse_args()
@@ -88,11 +91,14 @@ def main():
         labels = data['labels'].to(args.device)
         input_ids = data['input_ids'].to(args.device)
         with torch.no_grad():
-            pub_output_logits = pub_model(input_ids).logits
-            fine_tuned_output_logits = fine_tuned_model(input_ids).logits
+            #pub_output_logits = top_p_filtering(pub_model(input_ids).logits.squeeze(), 0.95).unsqueeze(0)
+            pub_output_logits =pub_model(input_ids).logits
+            #fine_tuned_output_logits = top_p_filtering(fine_tuned_model(input_ids).logits.squeeze().cpu(), 0.95).unsqueeze(0)
+            fine_tuned_output_logits =fine_tuned_model(input_ids).logits
             dp_fine_tuned_output_logits = dp_fine_tuned_model(input_ids).logits
             fine_tuned_output_softmax = nn.functional.softmax(fine_tuned_output_logits.squeeze())
-            pub_output_softmax = nn.functional.softmax(pub_output_logits.squeeze())
+            pub_output_logits_filtered = top_p_filtering(fine_tuned_output_logits.clone().squeeze(), args.p_value) 
+            pub_output_softmax = nn.functional.softmax(pub_output_logits_filtered/args.temperature)
             
             #output_dists = priv_ensemble.pred_dist(input_ids)
             ensemble_logits = []
@@ -117,8 +123,8 @@ def main():
             else:
                 break
 
-        pub_neg_log_likelihood.append(calc_loss(pub_output_logits, labels))
-        fine_tuned_neg_log_likelihood.append(calc_loss(fine_tuned_output_logits, labels))
+        pub_neg_log_likelihood.append(calc_loss((pub_output_logits), labels))
+        fine_tuned_neg_log_likelihood.append(calc_loss((fine_tuned_output_logits), labels))
         dp_fine_tuned_neg_log_likelihood.append(calc_loss(dp_fine_tuned_output_logits, labels))
 
     pre_trained_ppl = torch.exp(torch.stack(pub_neg_log_likelihood))
@@ -134,6 +140,8 @@ def main():
 
     print(f"Total privacy loss of model: {np.sum(priv_loss):.4f}")
     print(f"Average lambda value: {np.mean(lambdas):.4f}")
+    print(f"Min lambda: {np.min(lambdas)}")
+    print(f"Max lambda: {np.max(lambdas)}")
 
     #priv_ensemble.print_priv_losses()
     #priv_ensemble.print_lambdas()
@@ -154,9 +162,12 @@ def plot_ppl(ppl_scores):
     plt.clf()
 
 def private_pred(priv_model, pub_model, target):
-    lambd = lambda_solver_bisection(pub_model.cpu(), target)
+    #lambd = lambda_solver_bisection(pub_model.cpu(), target)
+    i = torch.min(torch.nonzero(pub_model))
+    lambd = max((1 - 1/(pub_model[i]*(np.exp(target)-1) + 1)).cpu(), 0)
+    #lambd = 0.01 
     loss = calc_indiv_priv_loss(pub_model, lambd)
-    pred = lambd * priv_model + (1-lambd) * pub_model
+    pred = lambd * priv_model + (1-lambd) * pub_model + 1e-20
     return pred, loss.cpu(), lambd
 
 def lambda_solver_bisection(pub_pred, target):
@@ -171,9 +182,38 @@ def lambda_solver_bisection(pub_pred, target):
     return lambd
 
 def calc_indiv_priv_loss(pub_pred, lambd):
-    return torch.log((lambd + (1-lambd) * torch.max(pub_pred)) / 
-                      ((1-lambd) * torch.max(pub_pred)) 
-                      )**2
+    i = torch.min(torch.nonzero(pub_pred))
+    loss = torch.log(lambd / ((1-lambd) * pub_pred[i]) + 1)
+    return loss
+
+def renyiDiv(p, q, alpha=float('inf')):
+    if alpha == float('inf'):
+        RD = torch.log(torch.max(p/q))
+    elif alpha == 1:
+        RD = torch.sum(p*torch.log(p/q))
+    else:
+        RD = 1/(alpha-1)*torch.log(
+            torch.sum((p**alpha)/(q**(alpha-1))))
+    if torch.isnan(RD):
+        RD = torch.log(torch.max(p/q))
+    return RD 
+
+def top_p_filtering(logits, p, filter_value=-float("Inf")):
+    sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+
+    # Remove tokens with cumulative probability above the threshold (token with 0 are kept)
+    sorted_indices_to_remove = cumulative_probs > p
+
+    # Shift the indices to the right to keep also the first token above the threshold
+    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+    sorted_indices_to_remove[..., 0] = 0
+
+    # scatter sorted tensors to original indexing
+    indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+    logits[indices_to_remove] = filter_value
+
+    return logits
 
 if __name__ == "__main__":
     main()
