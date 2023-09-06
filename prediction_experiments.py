@@ -93,6 +93,8 @@ def main():
     left_over = 0
     target = args.epsilon / args.query_budget
 
+    fine_tuned_model.eval()
+
     for i, data in enumerate(tqdm.tqdm(test_loader)):
         labels = data['labels'].to(args.device)
         input_ids = data['input_ids'].to(args.device)
