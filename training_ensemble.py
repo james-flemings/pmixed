@@ -19,12 +19,12 @@ import numpy as np
 import argparse
 import tqdm
 
-set_seed(0)
+#set_seed(0)
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model_name", type=str, default="GPT2")
 parser.add_argument("--dataset", type=str, default="wikitext")
-parser.add_argument("--subset", type=str, default="wikitext-103-raw-v1")
+parser.add_argument("--subset", type=str, default="wikitext-103-v1")
 parser.add_argument("--num_ensemble", type=int, default=8)
 parser.add_argument("--epochs", type=int, default=3)
 parser.add_argument("--lora_r", type=int, default=4)

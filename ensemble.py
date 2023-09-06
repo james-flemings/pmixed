@@ -13,13 +13,14 @@ import os
 class Ensemble():
     def __init__(self, model_dirs, model_name, tokenizer,
                 device="cpu", q_budget=1024, alpha=2, eps=2, 
-                target_mult=1.0
+                target_mult=1.0, p_value=1.0
     ):
         self.device = device
         self.model_name = model_name
         self.q_budget = q_budget
         self.alpha = alpha
         self.eps = eps
+        self.p_value = p_value
         self.pub_model = AutoModelForCausalLM.from_pretrained(self.model_name,
                                                      pad_token_id=tokenizer.eos_token_id).to(
                                                      self.device)
@@ -50,8 +51,9 @@ class Ensemble():
         elif alpha == 1:
             RD = torch.sum(p*torch.log(p/q))
         else:
+            inds = torch.nonzero(q)
             RD = 1/(alpha-1)*torch.log(
-                torch.sum((p**alpha)/(q**(alpha-1))))
+                torch.sum((p[inds]**alpha)/(q[inds]**(alpha-1))))
         if torch.isnan(RD):
             RD = torch.log(torch.max(p/q))
         return RD 
@@ -61,11 +63,12 @@ class Ensemble():
         for i in range(self.num_ensemble):
             self.lora_ensemble.set_adapter(f"lora-{i}")
             logits = self.lora_ensemble(context).logits.squeeze()
-            output_dists.append(F.softmax(logits))
+            logits_filtered = self.top_p_filtering(logits.clone(), self.p_value)
+            output_dists.append(F.softmax(logits_filtered))
         logits = self.pub_model(context).logits.squeeze()
-        #logits_filtered = self.top_p_filtering(logits.clone(), 0.95)
-        #output_dists.append(F.softmax(logits_filtered))
+        #logits_filtered = self.top_p_filtering(logits.clone(), 0.99)
         output_dists.append(F.softmax(logits))
+        #output_dists.append(F.softmax(logits))
         return output_dists 
 
     def top_p_filtering(self, logits, p, filter_value=-float("Inf")):
@@ -85,17 +88,12 @@ class Ensemble():
 
         return logits
 
-    def calc_priv_loss(self, pred, p_pub):
-        #ind = torch.nonzero(p_pub)
-        #loss = torch.max(torch.max(p_pub[ind]/pred[ind]), torch.max(pred[ind]/p_pub[ind]))
-        loss = torch.max(torch.max(p_pub/pred), torch.max(pred/p_pub))
-        return (torch.log(loss)**2) / 2
-
     def priv_pred(self, output_dists):
         self.lambdas = [self.lambda_solver_bisection(output_dists[i].cpu(),
                                                     output_dists[self.num_ensemble].cpu(),
                                                     i
                                                     ) for i in range(self.num_ensemble)]
+        #self.lambdas = [0.1 for i in range(self.num_ensemble)]
         self.lambda_history.append(np.mean(self.lambdas))
         mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[i])
                        for i in range(self.num_ensemble)]
@@ -103,25 +101,27 @@ class Ensemble():
         mixed_dists = torch.stack(mixed_dists)
         ensemble_dist = torch.mean(mixed_dists, dim=0) 
         pub_pred = output_dists[self.num_ensemble]
-        losses = [self.renyiDiv(mix_dist.cpu(), pub_pred.cpu(), alpha=self.alpha) for mix_dist in mixed_dists]
+        losses = [max(self.renyiDiv(mix_dist.cpu(), pub_pred.cpu(), alpha=2*self.alpha),
+               self.renyiDiv(pub_pred.cpu(), mix_dist.cpu(), alpha=2*self.alpha)) for mix_dist in mixed_dists]
+        #losses = [self.calc_priv_loss(mix_dist, pub_pred) for mix_dist in mixed_dists]
         
         for i, loss in enumerate(losses):
             self.personalized_priv_loss[i].append(loss.cpu())
-            #self.left_over_priv_loss[i] += (self.target/2 - loss.cpu().item())
+            self.left_over_priv_loss[i] += (self.target/2 - loss.cpu().item())
         
-        return ensemble_dist
+        return ensemble_dist 
 
     def lambda_solver_bisection(self, p_priv, p_pub, i):
         def f(lambd):
             pred = lambd * p_priv + (1-lambd) * p_pub
             #eps = self.calc_priv_loss(pred, p_pub)
-            #return (eps - (self.target/2 + self.left_over_priv_loss[i]))
-            eps = self.renyiDiv(pred, p_pub, alpha=self.alpha)
-            return (eps - self.target/2)
+            eps = max(self.renyiDiv(pred, p_pub, alpha=2*self.alpha),
+                      self.renyiDiv(p_pub, pred, alpha=2*self.alpha))
+            return (eps - (self.target/2 + self.left_over_priv_loss[i]))
         if f(1) <= 0.0:
             lambd = 1 
         else:
-            lambd = bisect(f, 0, 1, maxiter=20, disp=False)
+            lambd = bisect(f, 0, 1, maxiter=10, disp=False)
         return lambd
 
     def mix(self, p, p_prime, lambd=0.5):
