@@ -32,7 +32,8 @@ def group_texts(examples, block_size):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--epsilon", type=float, default=None)
+    parser.add_argument("--epsilon", type=float, default=2.0)
+    parser.add_argument("--query_budget", type=int, default=512)
     parser.add_argument("--model_name", type=str, default="GPT2")
     parser.add_argument("--p", type=float, default=1.0)
     parser.add_argument("--T", type=int, default=512)
@@ -80,37 +81,58 @@ def main():
     pub_nll = []
     priv_nll = []
     ground_nll = []
-    privacy_loss = []
+    mix_nll = []
+    priv_loss = []
+    lambdas = []
 
     c = args.start_context
-
+    target = args.epsilon / args.query_budget
     for i, data in enumerate(tqdm.tqdm(test_loader)):
         input_ids = data['input_ids'].to(args.device)
         labels = data['labels'].to(args.device)
         pub_input_ids = input_ids[: , :c]
         priv_input_ids = input_ids[: , :c]
+        mix_input_ids = input_ids[: , :c]
         with torch.no_grad():
             for _ in tqdm.tqdm(range(args.seq_length-c)):
-                pub_logits = pub_model(pub_input_ids).logits
-                priv_logits = priv_model(priv_input_ids).logits
+                pub_logits = pub_model(pub_input_ids).logits.squeeze()[-1:, :]
+                priv_logits = priv_model(priv_input_ids).logits.squeeze()[-1:, :]
+                mix_pub_logits = pub_model(mix_input_ids).logits.squeeze()[-1:, :]
+                mix_priv_logits = priv_model(mix_input_ids).logits.squeeze()[-1:, :]
 
-                pub_logits_filtered = top_p_filtering(pub_logits.clone().squeeze(), args.p)
-                priv_logits_filtered = top_p_filtering(priv_logits.clone().squeeze(), args.p)
+                pub_logits_filtered, _ = top_p_filtering(pub_logits.clone(), args.p)
+                priv_logits_filtered, _ = top_p_filtering(priv_logits.clone(), args.p)
+                #mix_pub_logits_filtered, ind = top_p_filtering(mix_pub_logits.clone(), args.p)
+                mix_priv_logits_filtered, ind = top_p_filtering(mix_priv_logits.clone(), args.p)
+                mix_pub_logits_filtered = mix_pub_logits.clone()
+                mix_pub_logits_filtered[ind] = -float('Inf')
+                #mix_priv_logits_filtered = mix_priv_logits.clone()
+                #mix_priv_logits_filtered[ind] = -float('Inf')
+                
+                pub_probs = F.softmax(pub_logits_filtered, dim=-1)
+                priv_probs = F.softmax(priv_logits_filtered, dim=-1)
+                mix_pub_probs = F.softmax(mix_pub_logits_filtered, dim=-1)
+                mix_priv_probs = F.softmax(mix_priv_logits_filtered, dim=-1)
 
-                pub_probs_filtered = F.softmax(pub_logits_filtered, dim=-1)
-                priv_probs_filtered = F.softmax(priv_logits_filtered, dim=-1)
+                mix_probs, loss, lambd = private_pred(mix_priv_probs[-1, :], mix_pub_probs[-1, :], target)
+                priv_loss.append(loss)
+                lambdas.append(lambd)
 
-                pub_next_indicies = pub_probs_filtered[-1].multinomial(1).view(1, -1)
-                priv_next_indicies = priv_probs_filtered[-1].multinomial(1).view(1, -1)
+                pub_next_indicies = pub_probs.multinomial(1).view(1, -1)
+                priv_next_indicies = priv_probs.multinomial(1).view(1, -1)
+                mix_next_indicies = mix_probs.multinomial(1).view(1, -1)
 
                 pub_input_ids = torch.cat([pub_input_ids, pub_next_indicies[:, :1]], dim=1)
                 priv_input_ids = torch.cat([priv_input_ids, priv_next_indicies[:, :1]], dim=1)
+                mix_input_ids = torch.cat([mix_input_ids, mix_next_indicies[:, :1]], dim=1)
 
             ground_nll.append(calc_loss(pub_model(input_ids).logits.squeeze()[c:, :], labels[:, c:]))
             pub_nll.append(calc_loss(pub_model(pub_input_ids).logits.squeeze()[c:, :],
                                      pub_input_ids[:, c:]))
             priv_nll.append(calc_loss(pub_model(priv_input_ids).logits.squeeze()[c:, :],
                                       priv_input_ids[:, c:]))
+            mix_nll.append(calc_loss(pub_model(mix_input_ids).logits.squeeze()[c:, :],
+                                      mix_input_ids[:, c:]))
             #for j in tqdm.tqdm(range(args.seq_length-args.start_context)):
             break
 
@@ -118,10 +140,18 @@ def main():
     ground_ppl = torch.exp(torch.stack(ground_nll))
     pub_ppl = torch.abs(torch.exp(torch.stack(pub_nll)) - ground_ppl)
     priv_ppl = torch.abs(torch.exp(torch.stack(priv_nll)) - ground_ppl)
+    mix_ppl = torch.abs(torch.exp(torch.stack(mix_nll)) - ground_ppl)
 
     print(f"Perplexity score for Ground Truth: {ground_ppl.mean():.2f}")
     print(f"Perplexity score for Pre-Trained Model: {pub_ppl.mean():.2f}")
     print(f"Perplexity score for Fine-Tuned Model: {priv_ppl.mean():.2f}")
+    print(f"Perplexity score for Mix Model: {mix_ppl.mean():.2f}")
+
+    print(f"Total privacy loss of model: {sum(priv_loss):.4f}")
+    print(f"Max loss", max(priv_loss))
+    print(f"Average lambda value: {np.mean(lambdas):.4f}")
+    print(f"Min lambda: {np.min(lambdas)}")
+    print(f"Max lambda: {np.max(lambdas)}")
 
 def calc_loss(logits, labels):
     shift_logits = logits[..., :-1, :].contiguous()
@@ -144,17 +174,15 @@ def top_p_filtering(logits, p, filter_value=-float("Inf")):
     indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
     logits[indices_to_remove] = filter_value
 
-    return logits
+    return logits, indices_to_remove
 
-def private_pred(priv_model, pub_model, target, count, alpha=2):
+def private_pred(priv_model, pub_model, target, alpha=2):
     lambd = lambda_solver_bisection(priv_model.cpu(), pub_model.cpu(), target, 2*alpha)
-    #lambd = 0.1
+    #lambd = 0.4
     pred = lambd * priv_model + (1-lambd) * pub_model
     loss = max(renyiDiv(pred.cpu(), pub_model.cpu(), alpha=2*alpha),
                renyiDiv(pub_model.cpu(), pred.cpu(), alpha=2*alpha)).item()
-    if loss > target:
-        count += 1
-    return pred, loss, lambd, count
+    return pred, loss, lambd
 
 def lambda_solver_bisection(p_priv, p_pub, target, alpha):
     def f(lambd):
