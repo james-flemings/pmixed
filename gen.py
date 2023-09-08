@@ -11,9 +11,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
+from transformers import GPT2LMHeadModel, GPT2Tokenizer, set_seed
 from datasets import load_dataset
 from peft import PeftModel
+
 
 
 def wiki_tokenize_function(examples, tokenizer):
@@ -30,19 +31,8 @@ def group_texts(examples, block_size):
     result["labels"] = result["input_ids"].copy()
     return result
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--epsilon", type=float, default=2.0)
-    parser.add_argument("--query_budget", type=int, default=512)
-    parser.add_argument("--model_name", type=str, default="GPT2")
-    parser.add_argument("--p", type=float, default=1.0)
-    parser.add_argument("--T", type=int, default=512)
-    parser.add_argument("--device", type=str, default="cpu")
-    parser.add_argument("--seq_length", type=int, default=512)
-    parser.add_argument("--dataset", type=str, default="wikitext")
-    parser.add_argument("--data_subset", type=str, default="wikitext-103-v1")
-    parser.add_argument("--start_context", type=int, default=32)
-    args = parser.parse_args()
+def main(args):
+    set_seed(args.seed)
 
     tokenizer = GPT2Tokenizer.from_pretrained(args.model_name)
     pub_model = GPT2LMHeadModel.from_pretrained(args.model_name)
@@ -53,6 +43,7 @@ def main():
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
+    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
 
     dataset = load_dataset(args.dataset, args.data_subset)
 
@@ -73,7 +64,7 @@ def main():
 
     test_data = lm_dataset['test']
     test_data.set_format(type="torch")
-    test_loader = DataLoader(test_data)#, shuffle=True)
+    test_loader = DataLoader(test_data, shuffle=True)
 
     pub_model.eval()
     priv_model.eval()
@@ -82,69 +73,88 @@ def main():
     priv_nll = []
     ground_nll = []
     mix_nll = []
+    dpsgd_nll = []
     priv_loss = []
     lambdas = []
 
     c = args.start_context
-    target = args.epsilon / args.query_budget
-    for i, data in enumerate(tqdm.tqdm(test_loader)):
+    epsilon = args.epsilon * (args.alpha - 1) / (args.alpha - 3/4)
+    target = epsilon / args.query_budget
+    left_over = 0
+    total_length = 0
+    for i, data in enumerate(test_loader):
         input_ids = data['input_ids'].to(args.device)
         labels = data['labels'].to(args.device)
         pub_input_ids = input_ids[: , :c]
         priv_input_ids = input_ids[: , :c]
+        dpsgd_input_ids = input_ids[: , :c]
         mix_input_ids = input_ids[: , :c]
         with torch.no_grad():
-            for _ in tqdm.tqdm(range(args.seq_length-c)):
+            for j in tqdm.tqdm(range(args.seq_length-c)):
                 pub_logits = pub_model(pub_input_ids).logits.squeeze()[-1:, :]
                 priv_logits = priv_model(priv_input_ids).logits.squeeze()[-1:, :]
+                dpsgd_logits = dp_fine_tuned_model(dpsgd_input_ids).logits.squeeze()[-1:, :]
                 mix_pub_logits = pub_model(mix_input_ids).logits.squeeze()[-1:, :]
                 mix_priv_logits = priv_model(mix_input_ids).logits.squeeze()[-1:, :]
 
                 pub_logits_filtered, _ = top_p_filtering(pub_logits.clone(), args.p)
                 priv_logits_filtered, _ = top_p_filtering(priv_logits.clone(), args.p)
-                #mix_pub_logits_filtered, ind = top_p_filtering(mix_pub_logits.clone(), args.p)
+                dpsgd_logits_filtered, _ = top_p_filtering(dpsgd_logits.clone(), args.p)
                 mix_priv_logits_filtered, ind = top_p_filtering(mix_priv_logits.clone(), args.p)
                 mix_pub_logits_filtered = mix_pub_logits.clone()
                 mix_pub_logits_filtered[ind] = -float('Inf')
-                #mix_priv_logits_filtered = mix_priv_logits.clone()
-                #mix_priv_logits_filtered[ind] = -float('Inf')
                 
                 pub_probs = F.softmax(pub_logits_filtered, dim=-1)
                 priv_probs = F.softmax(priv_logits_filtered, dim=-1)
+                dpsgd_probs = F.softmax(dpsgd_logits_filtered, dim=-1)
                 mix_pub_probs = F.softmax(mix_pub_logits_filtered, dim=-1)
                 mix_priv_probs = F.softmax(mix_priv_logits_filtered, dim=-1)
 
-                mix_probs, loss, lambd = private_pred(mix_priv_probs[-1, :], mix_pub_probs[-1, :], target)
+                mix_probs, loss, lambd = private_pred(mix_priv_probs[-1, :], mix_pub_probs[-1, :],
+                                                       target + left_over, args.alpha)
+                #left_over += (target/2 - loss)
                 priv_loss.append(loss)
                 lambdas.append(lambd)
 
                 pub_next_indicies = pub_probs.multinomial(1).view(1, -1)
                 priv_next_indicies = priv_probs.multinomial(1).view(1, -1)
+                dpsgd_next_indicies = dpsgd_probs.multinomial(1).view(1, -1)
                 mix_next_indicies = mix_probs.multinomial(1).view(1, -1)
 
                 pub_input_ids = torch.cat([pub_input_ids, pub_next_indicies[:, :1]], dim=1)
                 priv_input_ids = torch.cat([priv_input_ids, priv_next_indicies[:, :1]], dim=1)
+                dpsgd_input_ids = torch.cat([dpsgd_input_ids, dpsgd_next_indicies[:, :1]], dim=1)
                 mix_input_ids = torch.cat([mix_input_ids, mix_next_indicies[:, :1]], dim=1)
+                total_length += 1
+                if (total_length == args.query_budget or j == 200
+                    or pub_next_indicies == tokenizer.eos_token_id
+                    or priv_next_indicies == tokenizer.eos_token_id
+                    or dpsgd_next_indicies == tokenizer.eos_token_id
+                    or mix_next_indicies == tokenizer.eos_token_id):
+                    break 
 
             ground_nll.append(calc_loss(pub_model(input_ids).logits.squeeze()[c:, :], labels[:, c:]))
             pub_nll.append(calc_loss(pub_model(pub_input_ids).logits.squeeze()[c:, :],
                                      pub_input_ids[:, c:]))
             priv_nll.append(calc_loss(pub_model(priv_input_ids).logits.squeeze()[c:, :],
                                       priv_input_ids[:, c:]))
+            dpsgd_nll.append(calc_loss(pub_model(dpsgd_input_ids).logits.squeeze()[c:, :],
+                                      dpsgd_input_ids[:, c:]))
             mix_nll.append(calc_loss(pub_model(mix_input_ids).logits.squeeze()[c:, :],
                                       mix_input_ids[:, c:]))
-            #for j in tqdm.tqdm(range(args.seq_length-args.start_context)):
-            break
+            if total_length == args.query_budget:
+                break 
 
-        #if i < args.query_budget // args.seq_length:
     ground_ppl = torch.exp(torch.stack(ground_nll))
     pub_ppl = torch.abs(torch.exp(torch.stack(pub_nll)) - ground_ppl)
     priv_ppl = torch.abs(torch.exp(torch.stack(priv_nll)) - ground_ppl)
+    dpsgd_ppl = torch.abs(torch.exp(torch.stack(dpsgd_nll)) - ground_ppl)
     mix_ppl = torch.abs(torch.exp(torch.stack(mix_nll)) - ground_ppl)
 
     print(f"Perplexity score for Ground Truth: {ground_ppl.mean():.2f}")
     print(f"Perplexity score for Pre-Trained Model: {pub_ppl.mean():.2f}")
     print(f"Perplexity score for Fine-Tuned Model: {priv_ppl.mean():.2f}")
+    print(f"Perplexity score for DP-Fine-Tuned Model: {dpsgd_ppl.mean():.2f}")
     print(f"Perplexity score for Mix Model: {mix_ppl.mean():.2f}")
 
     print(f"Total privacy loss of model: {sum(priv_loss):.4f}")
@@ -152,6 +162,8 @@ def main():
     print(f"Average lambda value: {np.mean(lambdas):.4f}")
     print(f"Min lambda: {np.min(lambdas)}")
     print(f"Max lambda: {np.max(lambdas)}")
+
+    return ground_ppl.mean().cpu(), pub_ppl.mean().cpu(), priv_ppl.mean().cpu(), dpsgd_ppl.mean().cpu(), mix_ppl.mean().cpu()
 
 def calc_loss(logits, labels):
     shift_logits = logits[..., :-1, :].contiguous()
@@ -178,7 +190,7 @@ def top_p_filtering(logits, p, filter_value=-float("Inf")):
 
 def private_pred(priv_model, pub_model, target, alpha=2):
     lambd = lambda_solver_bisection(priv_model.cpu(), pub_model.cpu(), target, 2*alpha)
-    #lambd = 0.4
+    #lambd = 1
     pred = lambd * priv_model + (1-lambd) * pub_model
     loss = max(renyiDiv(pred.cpu(), pub_model.cpu(), alpha=2*alpha),
                renyiDiv(pub_model.cpu(), pred.cpu(), alpha=2*alpha)).item()
@@ -189,7 +201,6 @@ def lambda_solver_bisection(p_priv, p_pub, target, alpha):
         pred = lambd * p_priv + (1-lambd) * p_pub
         eps = max(renyiDiv(pred, p_pub, alpha=alpha), renyiDiv(p_pub, pred, alpha=alpha))
         return (eps - target/2)
-
     if f(1) <= 0.0:
         lambd = 1 
     else:
@@ -202,14 +213,16 @@ def calc_priv_loss(p_pub, pred):
     return (torch.log(loss)**2) / 2
 
 def renyiDiv(p, q, alpha=float('inf')):
+    # Prevent round off error when performing division of two equal tensors
+    # where really small values like ~1e-13 turn to zero
+    if torch.all(torch.eq(p, q)):
+        return torch.tensor(0)
     if alpha == float('inf'):
         RD = torch.log(torch.max(p/q))
     elif alpha == 1:
         RD = torch.sum(p*torch.log(p/q))
     else:
         inds = torch.nonzero(q)
-        #r = (p[inds]**alpha)/(q[inds]**(alpha-1))
-        #RD = 1/(alpha-1)*torch.log(torch.sum(r))
         RD = 1/(alpha-1)*torch.log(
             torch.sum((p[inds]**alpha)/(q[inds]**(alpha-1))))
     if torch.isnan(RD):
@@ -217,4 +230,38 @@ def renyiDiv(p, q, alpha=float('inf')):
     return RD 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--epsilon", type=float, default=2.0)
+    parser.add_argument("--alpha", type=int, default=2)
+    parser.add_argument("--query_budget", type=int, default=512)
+    parser.add_argument("--model_name", type=str, default="GPT2")
+    parser.add_argument("--p", type=float, default=1.0)
+    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--seq_length", type=int, default=512)
+    parser.add_argument("--dataset", type=str, default="wikitext")
+    parser.add_argument("--data_subset", type=str, default="wikitext-103-v1")
+    parser.add_argument("--start_context", type=int, default=32)
+    args = parser.parse_args()
+
+    ground_ppl_list = []
+    pub_ppl_list = []
+    priv_ppl_list = []
+    dpsgd_ppl_list = []
+    mix_ppl_list = []
+    for i in range(10):
+        args.seed = i 
+        print("Seed", i)
+        ground_ppl, pub_ppl, priv_ppl, dpsgd_ppl, mix_ppl = main(args)
+        if pub_ppl == np.nan:
+            continue
+        ground_ppl_list.append(ground_ppl)
+        pub_ppl_list.append(pub_ppl)
+        priv_ppl_list.append(priv_ppl)
+        dpsgd_ppl_list.append(dpsgd_ppl)
+        mix_ppl_list.append(mix_ppl)
+
+    print(f"Final Perplexity score for Ground Truth: {np.mean(ground_ppl_list):.2f}")
+    print(f"Final Perplexity score for Pre-Trained Model: {np.mean(pub_ppl_list):.2f}")
+    print(f"Final Perplexity score for Fine-Tuned Model: {np.mean(priv_ppl_list):.2f}")
+    print(f"Final Perplexity score for DP-Fine-Tuned Model: {np.mean(dpsgd_ppl_list):.2f}")
+    print(f"Final Perplexity score for Mix Model: {np.mean(mix_ppl_list):.2f}")
