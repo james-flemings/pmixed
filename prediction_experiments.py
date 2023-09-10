@@ -12,7 +12,7 @@ from peft import PeftModel
 import copy
 import tqdm
 import matplotlib.pyplot as plt
-from scipy.optimize import bisect
+from scipy.optimize import bisect, minimize 
 import numpy as np
 
 set_seed(0)
@@ -58,8 +58,7 @@ def main():
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
-    #dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
-    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-1.0-dp-finetuned-wikitext-103-raw-v1.pt")).to(args.device)
+    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
 
     seq_length = 512
     dataset = load_dataset(args.dataset, args.data_subset)
@@ -104,31 +103,38 @@ def main():
             dp_fine_tuned_output_logits = dp_fine_tuned_model(input_ids).logits
             #pub_output_softmax = nn.functional.softmax(pub_output_logits.squeeze()/args.temperature)
             #fine_tuned_output_softmax = nn.functional.softmax(fine_tuned_output_logits.squeeze()/args.temperature)
-            fine_tuned_output_logits_filtered = top_p_filtering(fine_tuned_output_logits.clone().squeeze(), args.p_value) 
+            #fine_tuned_output_logits_filtered = top_p_filtering(fine_tuned_output_logits.clone().squeeze(), args.p_value) 
             #fine_tuned_output_logits_filtered = epsilon_filtering(fine_tuned_output_logits.clone().squeeze(), args.e_value) 
-            fine_tuned_output_softmax = nn.functional.softmax(fine_tuned_output_logits_filtered/args.temperature)
-            pub_output_logits_filtered = top_p_filtering(pub_output_logits.clone().squeeze(), 0.99) 
+            #fine_tuned_output_softmax = nn.functional.softmax(fine_tuned_output_logits_filtered/args.temperature)
+            #pub_output_logits_filtered = top_p_filtering(pub_output_logits.clone().squeeze(), 0.99) 
             #pub_output_logits_filtered = epsilon_filtering(pub_output_logits.clone().squeeze(), args.e_value) 
-            pub_output_softmax = nn.functional.softmax(pub_output_logits_filtered/args.temperature)
+            #pub_output_softmax = nn.functional.softmax(pub_output_logits_filtered/args.temperature)
 
-            output_dists = priv_ensemble.pred_dist(input_ids)
+            pub_output_logits_filtered, inds = top_k_filtering(pub_output_logits.clone().squeeze(), 400) 
+            pub_output_softmax = nn.functional.softmax(pub_output_logits.squeeze())
+
+            fine_tuned_output_logits_filtered, _ = top_k_filtering(fine_tuned_output_logits.squeeze().clone(), 400)
+            #fine_tuned_output_logits_filtered[inds] = -float("Inf")
+            fine_tuned_output_softmax = nn.functional.softmax(fine_tuned_output_logits.squeeze())
+
+            #output_dists = priv_ensemble.pred_dist(input_ids)
             ensemble_logits = []
             priv_logits = []
 
             if i < args.query_budget // seq_length:
                 for j in tqdm.tqdm(range(seq_length)):
-                    token_softmax = [output_dist[j] for output_dist in output_dists]
-                    ensemble_output_dist = priv_ensemble.priv_pred(token_softmax)
-                    ensemble_logits.append(torch.log(ensemble_output_dist))
+                    #token_softmax = [output_dist[j] for output_dist in output_dists]
+                    #ensemble_output_dist = priv_ensemble.priv_pred(token_softmax)
+                    #ensemble_logits.append(torch.log(ensemble_output_dist))
                     priv_pred, loss, lambd, COUNT = private_pred(fine_tuned_output_softmax[j], pub_output_softmax[j],
                                              target + left_over, COUNT)
                     priv_logits.append(torch.log(priv_pred))
-                    left_over += (target/2 - loss)
+                    #left_over += (target/2 - loss)
                     priv_loss.append(loss)
                     lambdas.append(lambd)
 
-                ensemble_logits = torch.stack(ensemble_logits)
-                ensemble_neg_log_likelihood.append(calc_loss(ensemble_logits, labels))
+                #ensemble_logits = torch.stack(ensemble_logits)
+                #ensemble_neg_log_likelihood.append(calc_loss(ensemble_logits, labels))
                 priv_logits = torch.stack(priv_logits)
                 priv_neg_log_likelihood.append(calc_loss(priv_logits, labels))
             else:
@@ -141,14 +147,14 @@ def main():
     pre_trained_ppl = torch.exp(torch.stack(pub_neg_log_likelihood))
     fine_tuned_ppl = torch.exp(torch.stack(fine_tuned_neg_log_likelihood))
     dp_fine_tuned_ppl = torch.exp(torch.stack(dp_fine_tuned_neg_log_likelihood))
-    ensemble_ppl = torch.exp(torch.stack(ensemble_neg_log_likelihood))
+    #ensemble_ppl = torch.exp(torch.stack(ensemble_neg_log_likelihood))
     priv_ppl = torch.exp(torch.stack(priv_neg_log_likelihood))
 
     print(f"Perplexity score for Pre-Trained Model: {pre_trained_ppl.mean():.2f}")
     print(f"Perplexity score for Fine-Tuned Model: {fine_tuned_ppl.mean():.2f}")
     print(f"Perplexity score for DP-Fine-Tuned Model: {dp_fine_tuned_ppl.mean():.2f}")
     print(f"Perplexity score for Private Prediction Model: {priv_ppl.mean():.2f}")
-    print(f"Perplexity score for Ensemble Private Prediction Model: {ensemble_ppl.mean():.2f}")
+    #print(f"Perplexity score for Ensemble Private Prediction Model: {ensemble_ppl.mean():.2f}")
 
     print(f"Total privacy loss of model: {sum(priv_loss):.4f}")
     print(f"Max loss", max(priv_loss))
@@ -158,10 +164,10 @@ def main():
 
     print("Count ", COUNT)
 
-    priv_ensemble.print_priv_losses()
-    priv_ensemble.print_lambdas()
-    priv_ensemble.plot_individual_loss()
-    priv_ensemble.plot_lambdas()
+    #priv_ensemble.print_priv_losses()
+    #priv_ensemble.print_lambdas()
+    #priv_ensemble.plot_individual_loss()
+    #priv_ensemble.plot_lambdas()
     #plot_ppl(ensemble_ppl)
 
 def calc_loss(logits, labels):
@@ -178,6 +184,8 @@ def plot_ppl(ppl_scores):
 
 def private_pred(priv_model, pub_model, target, count, alpha=2):
     lambd = lambda_solver_bisection(priv_model.cpu(), pub_model.cpu(), target, 2*alpha)
+    if lambd == 0.0:
+        lambd = 0.01
     #lambd = 0.1
     pred = lambd * priv_model + (1-lambd) * pub_model
     loss = max(renyiDiv(pred.cpu(), pub_model.cpu(), alpha=2*alpha),
@@ -188,14 +196,16 @@ def private_pred(priv_model, pub_model, target, count, alpha=2):
 
 def lambda_solver_bisection(p_priv, p_pub, target, alpha):
     def f(lambd):
+        lambd = torch.tensor(lambd)
         pred = lambd * p_priv + (1-lambd) * p_pub
         eps = max(renyiDiv(pred, p_pub, alpha=alpha), renyiDiv(p_pub, pred, alpha=alpha))
         return (eps - target/2)
 
-    if f(1) <= 0.0:
-        lambd = 1 
-    else:
-        lambd = bisect(f, 0, 1, maxiter=10, disp=False)
+    #if f(1) <= 0.0:
+    #    lambd = 1 
+    #else:
+        #lambd = bisect(f, np.zeros(p_pub.size()[0]), np.ones(p_pub.size()[0]), maxiter=10, disp=False)
+    lambd = minimize(f, np.zeros(p_pub.size()[0]), options={"maxiter": 10, "disp": False})
     return lambd
 
 def calc_priv_loss(p_pub, pred):
@@ -242,6 +252,13 @@ def epsilon_filtering(logits, e, filter_value=-float("Inf")):
     indicies_to_remove[..., max_word.squeeze()] = 0
     logits[..., indicies_to_remove] = filter_value
     return logits
+
+def top_k_filtering(logits, top_k, filter_value=-float("Inf")):
+    # Remove all tokens with a probability less than the last token of the top-k
+    indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
+    logits[indices_to_remove] = filter_value
+    return logits, indices_to_remove
+
 
 if __name__ == "__main__":
     main()

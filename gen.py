@@ -16,7 +16,6 @@ from datasets import load_dataset
 from peft import PeftModel
 
 
-
 def wiki_tokenize_function(examples, tokenizer):
     return tokenizer(examples["text"])
 
@@ -90,27 +89,50 @@ def main(args):
         dpsgd_input_ids = input_ids[: , :c]
         mix_input_ids = input_ids[: , :c]
         with torch.no_grad():
-            for j in tqdm.tqdm(range(args.seq_length-c)):
+            for _ in range(args.max_length):
                 pub_logits = pub_model(pub_input_ids).logits.squeeze()[-1:, :]
                 priv_logits = priv_model(priv_input_ids).logits.squeeze()[-1:, :]
                 dpsgd_logits = dp_fine_tuned_model(dpsgd_input_ids).logits.squeeze()[-1:, :]
                 mix_pub_logits = pub_model(mix_input_ids).logits.squeeze()[-1:, :]
                 mix_priv_logits = priv_model(mix_input_ids).logits.squeeze()[-1:, :]
-
+                '''
                 pub_logits_filtered, _ = top_p_filtering(pub_logits.clone(), args.p)
                 priv_logits_filtered, _ = top_p_filtering(priv_logits.clone(), args.p)
                 dpsgd_logits_filtered, _ = top_p_filtering(dpsgd_logits.clone(), args.p)
                 mix_priv_logits_filtered, ind = top_p_filtering(mix_priv_logits.clone(), args.p)
                 mix_pub_logits_filtered = mix_pub_logits.clone()
                 mix_pub_logits_filtered[ind] = -float('Inf')
-                
+                mix_pub_logits_filtered, ind = top_p_filtering(mix_pub_logits.clone(), args.p)
+                mix_priv_logits_filtered = mix_priv_logits.clone()
+                mix_priv_logits_filtered[ind] = -float('Inf')
+                '''
+                pub_logits_filtered, _ = top_k_filtering(pub_logits.clone(), args.k)
+                priv_logits_filtered, _ = top_k_filtering(priv_logits.clone(), args.k)
+                dpsgd_logits_filtered, _ = top_k_filtering(dpsgd_logits.clone(), args.k)
+                '''
+                mix_pub_logits_filtered, inds = top_k_filtering(mix_pub_logits.clone(), args.k)
+                mix_priv_logits_filtered = mix_priv_logits.clone()
+                mix_priv_logits_filtered[inds] = -float('Inf')
+                '''
+                mix_priv_logits_filtered, ind = top_k_filtering(mix_priv_logits.clone(), args.k)
+                mix_pub_logits_filtered = mix_pub_logits.clone()
+                mix_pub_logits_filtered[ind] = -float('Inf')
+
+                pub_logits_filtered[: , tokenizer.eos_token_id] = -float("inf")
+                priv_logits_filtered[: , tokenizer.eos_token_id] = -float("inf")
+                dpsgd_logits_filtered[: , tokenizer.eos_token_id] = -float("inf")
+                mix_pub_logits_filtered[: , tokenizer.eos_token_id] = -float("inf")
+                mix_priv_logits_filtered[: ,tokenizer.eos_token_id] = -float("inf")
+
                 pub_probs = F.softmax(pub_logits_filtered, dim=-1)
                 priv_probs = F.softmax(priv_logits_filtered, dim=-1)
                 dpsgd_probs = F.softmax(dpsgd_logits_filtered, dim=-1)
                 mix_pub_probs = F.softmax(mix_pub_logits_filtered, dim=-1)
                 mix_priv_probs = F.softmax(mix_priv_logits_filtered, dim=-1)
 
-                mix_probs, loss, lambd = private_pred(mix_priv_probs[-1, :], mix_pub_probs[-1, :],
+                # [-1, :]
+                mix_probs, loss, lambd = private_pred(mix_priv_probs[-1, :],
+                                                      mix_pub_probs[-1, :],
                                                        target + left_over, args.alpha)
                 #left_over += (target/2 - loss)
                 priv_loss.append(loss)
@@ -126,30 +148,27 @@ def main(args):
                 dpsgd_input_ids = torch.cat([dpsgd_input_ids, dpsgd_next_indicies[:, :1]], dim=1)
                 mix_input_ids = torch.cat([mix_input_ids, mix_next_indicies[:, :1]], dim=1)
                 total_length += 1
-                if (total_length == args.query_budget or j == 200
-                    or pub_next_indicies == tokenizer.eos_token_id
-                    or priv_next_indicies == tokenizer.eos_token_id
-                    or dpsgd_next_indicies == tokenizer.eos_token_id
-                    or mix_next_indicies == tokenizer.eos_token_id):
+
+                if total_length == args.query_budget:
                     break 
 
-            ground_nll.append(calc_loss(pub_model(input_ids).logits.squeeze()[c:, :], labels[:, c:]))
-            pub_nll.append(calc_loss(pub_model(pub_input_ids).logits.squeeze()[c:, :],
+            ground_nll.append(calc_loss(priv_model(input_ids).logits.squeeze()[c:, :], labels[:, c:]))
+            pub_nll.append(calc_loss(priv_model(pub_input_ids).logits.squeeze()[c:, :],
                                      pub_input_ids[:, c:]))
-            priv_nll.append(calc_loss(pub_model(priv_input_ids).logits.squeeze()[c:, :],
+            priv_nll.append(calc_loss(priv_model(priv_input_ids).logits.squeeze()[c:, :],
                                       priv_input_ids[:, c:]))
-            dpsgd_nll.append(calc_loss(pub_model(dpsgd_input_ids).logits.squeeze()[c:, :],
+            dpsgd_nll.append(calc_loss(priv_model(dpsgd_input_ids).logits.squeeze()[c:, :],
                                       dpsgd_input_ids[:, c:]))
-            mix_nll.append(calc_loss(pub_model(mix_input_ids).logits.squeeze()[c:, :],
+            mix_nll.append(calc_loss(priv_model(mix_input_ids).logits.squeeze()[c:, :],
                                       mix_input_ids[:, c:]))
             if total_length == args.query_budget:
                 break 
 
     ground_ppl = torch.exp(torch.stack(ground_nll))
-    pub_ppl = torch.abs(torch.exp(torch.stack(pub_nll)) - ground_ppl)
-    priv_ppl = torch.abs(torch.exp(torch.stack(priv_nll)) - ground_ppl)
-    dpsgd_ppl = torch.abs(torch.exp(torch.stack(dpsgd_nll)) - ground_ppl)
-    mix_ppl = torch.abs(torch.exp(torch.stack(mix_nll)) - ground_ppl)
+    pub_ppl = torch.exp(torch.stack(pub_nll))
+    priv_ppl = torch.exp(torch.stack(priv_nll))
+    dpsgd_ppl = torch.exp(torch.stack(dpsgd_nll))
+    mix_ppl = torch.exp(torch.stack(mix_nll)) 
 
     print(f"Perplexity score for Ground Truth: {ground_ppl.mean():.2f}")
     print(f"Perplexity score for Pre-Trained Model: {pub_ppl.mean():.2f}")
@@ -188,7 +207,13 @@ def top_p_filtering(logits, p, filter_value=-float("Inf")):
 
     return logits, indices_to_remove
 
-def private_pred(priv_model, pub_model, target, alpha=2):
+def top_k_filtering(logits, top_k, filter_value=-float("Inf")):
+    # Remove all tokens with a probability less than the last token of the top-k
+    indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
+    logits[indices_to_remove] = filter_value
+    return logits, indices_to_remove
+
+def private_pred(priv_model, pub_model, target,alpha=2):
     lambd = lambda_solver_bisection(priv_model.cpu(), pub_model.cpu(), target, 2*alpha)
     #lambd = 1
     pred = lambd * priv_model + (1-lambd) * pub_model
@@ -196,13 +221,13 @@ def private_pred(priv_model, pub_model, target, alpha=2):
                renyiDiv(pub_model.cpu(), pred.cpu(), alpha=2*alpha)).item()
     return pred, loss, lambd
 
-def lambda_solver_bisection(p_priv, p_pub, target, alpha):
+def lambda_solver_bisection(p_priv, p_pub, target, alpha, ):
     def f(lambd):
         pred = lambd * p_priv + (1-lambd) * p_pub
         eps = max(renyiDiv(pred, p_pub, alpha=alpha), renyiDiv(p_pub, pred, alpha=alpha))
         return (eps - target/2)
-    if f(1) <= 0.0:
-        lambd = 1 
+    if f(1.0) <= 0:
+        lambd = 1.0 
     else:
         lambd = bisect(f, 0, 1, maxiter=10, disp=False)
     return lambd
@@ -236,11 +261,13 @@ if __name__ == "__main__":
     parser.add_argument("--query_budget", type=int, default=512)
     parser.add_argument("--model_name", type=str, default="GPT2")
     parser.add_argument("--p", type=float, default=1.0)
+    parser.add_argument("--k", type=int, default=40)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--seq_length", type=int, default=512)
     parser.add_argument("--dataset", type=str, default="wikitext")
     parser.add_argument("--data_subset", type=str, default="wikitext-103-v1")
     parser.add_argument("--start_context", type=int, default=32)
+    parser.add_argument("--max_length", type=int, default=150)
     args = parser.parse_args()
 
     ground_ppl_list = []
@@ -248,11 +275,10 @@ if __name__ == "__main__":
     priv_ppl_list = []
     dpsgd_ppl_list = []
     mix_ppl_list = []
-    for i in range(10):
+    for i in tqdm.tqdm(range(0, 20)):
         args.seed = i 
-        print("Seed", i)
         ground_ppl, pub_ppl, priv_ppl, dpsgd_ppl, mix_ppl = main(args)
-        if pub_ppl == np.nan:
+        if np.isnan(pub_ppl):
             continue
         ground_ppl_list.append(ground_ppl)
         pub_ppl_list.append(pub_ppl)
