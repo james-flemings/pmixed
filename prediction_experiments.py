@@ -27,7 +27,8 @@ parser.add_argument("--seq_length", type=int, default=512)
 parser.add_argument("--query_budget", type=int, default=512)
 parser.add_argument("--target_multiplier", type=float, default=1.0)
 parser.add_argument("--epsilon", type=float, default=1.0)
-parser.add_argument("--temperature", type=float, default=0.95)
+parser.add_argument("--alpha", type=float, default=2)
+parser.add_argument("--temperature", type=float, default=0.90)
 parser.add_argument("--p_value", type=float, default=1.)
 parser.add_argument("--e_value", type=float, default=0.01)
 
@@ -90,7 +91,8 @@ def main():
     priv_loss = []
     lambdas = []
     left_over = 0
-    target = args.epsilon / args.query_budget
+    epsilon = args.epsilon * (args.alpha - 1) / (args.alpha - 3/4)
+    target = np.sqrt(epsilon / args.query_budget)
 
     fine_tuned_model.eval()
 
@@ -110,7 +112,7 @@ def main():
             #pub_output_logits_filtered = epsilon_filtering(pub_output_logits.clone().squeeze(), args.e_value) 
             #pub_output_softmax = nn.functional.softmax(pub_output_logits_filtered/args.temperature)
 
-            pub_output_logits_filtered, inds = top_k_filtering(pub_output_logits.clone().squeeze(), 400) 
+            #pub_output_logits_filtered, inds = top_k_filtering(pub_output_logits.clone().squeeze(), 200) 
             pub_output_softmax = nn.functional.softmax(pub_output_logits.squeeze())
 
             fine_tuned_output_logits_filtered, _ = top_k_filtering(fine_tuned_output_logits.squeeze().clone(), 400)
@@ -127,7 +129,7 @@ def main():
                     #ensemble_output_dist = priv_ensemble.priv_pred(token_softmax)
                     #ensemble_logits.append(torch.log(ensemble_output_dist))
                     priv_pred, loss, lambd, COUNT = private_pred(fine_tuned_output_softmax[j], pub_output_softmax[j],
-                                             target + left_over, COUNT)
+                                             target, COUNT, args.alpha, args.device)
                     priv_logits.append(torch.log(priv_pred))
                     #left_over += (target/2 - loss)
                     priv_loss.append(loss)
@@ -182,17 +184,15 @@ def plot_ppl(ppl_scores):
     plt.savefig(os.path.join("plt", "ensemble_perplexity_scores.png"))
     plt.clf()
 
-def private_pred(priv_model, pub_model, target, count, alpha=2):
-    lambd = lambda_solver_bisection(priv_model.cpu(), pub_model.cpu(), target, 2*alpha)
-    if lambd == 0.0:
-        lambd = 0.01
+def private_pred(priv_model, pub_model, target, count, alpha=2, device="cpu"):
+    #lambd = lambda_solver_bisection(priv_model.cpu(), pub_model.cpu(), target, 2*alpha)
+    lambdas = lambda_solver(priv_model, pub_model, target, device)
     #lambd = 0.1
-    pred = lambd * priv_model + (1-lambd) * pub_model
-    loss = max(renyiDiv(pred.cpu(), pub_model.cpu(), alpha=2*alpha),
-               renyiDiv(pub_model.cpu(), pred.cpu(), alpha=2*alpha)).item()
-    if loss > target:
-        count += 1
-    return pred, loss, lambd, count
+    pred = lambdas * priv_model + (1-lambdas) * pub_model
+    #loss = max(renyiDiv(pred.cpu(), pub_model.cpu(), alpha=2*alpha),
+    #           renyiDiv(pub_model.cpu(), pred.cpu(), alpha=2*alpha)).item()
+    loss = calc_priv_loss(pub_model, pred) 
+    return pred, loss, lambdas.cpu().mean(), count
 
 def lambda_solver_bisection(p_priv, p_pub, target, alpha):
     def f(lambd):
@@ -207,6 +207,14 @@ def lambda_solver_bisection(p_priv, p_pub, target, alpha):
         #lambd = bisect(f, np.zeros(p_pub.size()[0]), np.ones(p_pub.size()[0]), maxiter=10, disp=False)
     lambd = minimize(f, np.zeros(p_pub.size()[0]), options={"maxiter": 10, "disp": False})
     return lambd
+
+def lambda_solver(p_priv, p_pub, target, device):
+    lambdas = []
+    val_1 = ((np.exp(target) - 1) * p_pub) / (p_priv - p_pub)
+    val_2 = ((1 / np.exp(target) - 1) * p_pub)  / (p_priv - p_pub)
+    val = torch.max(val_1, val_2)
+    val = torch.min(val, torch.ones(val.size()[0]).to(device))
+    return val
 
 def calc_priv_loss(p_pub, pred):
     ind = torch.nonzero(p_pub)

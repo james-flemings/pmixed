@@ -78,7 +78,7 @@ def main(args):
 
     c = args.start_context
     epsilon = args.epsilon * (args.alpha - 1) / (args.alpha - 3/4)
-    target = epsilon / args.query_budget
+    target = np.sqrt(epsilon / args.query_budget)
     left_over = 0
     total_length = 0
     for i, data in enumerate(test_loader):
@@ -109,15 +109,17 @@ def main(args):
                 pub_logits_filtered, _ = top_k_filtering(pub_logits.clone(), args.k)
                 priv_logits_filtered, _ = top_k_filtering(priv_logits.clone(), args.k)
                 dpsgd_logits_filtered, _ = top_k_filtering(dpsgd_logits.clone(), args.k)
-                '''
+
                 mix_pub_logits_filtered, inds = top_k_filtering(mix_pub_logits.clone(), args.k)
+                #mix_priv_logits_filtered, ind = top_k_filtering(mix_priv_logits.clone(), args.k)
                 mix_priv_logits_filtered = mix_priv_logits.clone()
                 mix_priv_logits_filtered[inds] = -float('Inf')
                 '''
-                mix_priv_logits_filtered, ind = top_k_filtering(mix_priv_logits.clone(), args.k)
+                #mix_priv_logits_filtered, ind = top_k_filtering(mix_priv_logits.clone(), args.k)
+                mix_priv_logits_filtered = mix_priv_logits.clone()
                 mix_pub_logits_filtered = mix_pub_logits.clone()
-                mix_pub_logits_filtered[ind] = -float('Inf')
-
+                #mix_pub_logits_filtered[ind] = -float('Inf')
+                '''
                 pub_logits_filtered[: , tokenizer.eos_token_id] = -float("inf")
                 priv_logits_filtered[: , tokenizer.eos_token_id] = -float("inf")
                 dpsgd_logits_filtered[: , tokenizer.eos_token_id] = -float("inf")
@@ -130,11 +132,9 @@ def main(args):
                 mix_pub_probs = F.softmax(mix_pub_logits_filtered, dim=-1)
                 mix_priv_probs = F.softmax(mix_priv_logits_filtered, dim=-1)
 
-                # [-1, :]
                 mix_probs, loss, lambd = private_pred(mix_priv_probs[-1, :],
                                                       mix_pub_probs[-1, :],
-                                                       target + left_over, args.alpha)
-                #left_over += (target/2 - loss)
+                                                       target, args.alpha, args.device)
                 priv_loss.append(loss)
                 lambdas.append(lambd)
 
@@ -213,13 +213,15 @@ def top_k_filtering(logits, top_k, filter_value=-float("Inf")):
     logits[indices_to_remove] = filter_value
     return logits, indices_to_remove
 
-def private_pred(priv_model, pub_model, target,alpha=2):
-    lambd = lambda_solver_bisection(priv_model.cpu(), pub_model.cpu(), target, 2*alpha)
+def private_pred(priv_model, pub_model, target, alpha=2, device="cpu"):
+    #lambd = lambda_solver_bisection(priv_model.cpu(), pub_model.cpu(), target, 2*alpha)
+    lambdas = lambda_solver(priv_model, pub_model, target, device)
     #lambd = 1
-    pred = lambd * priv_model + (1-lambd) * pub_model
-    loss = max(renyiDiv(pred.cpu(), pub_model.cpu(), alpha=2*alpha),
-               renyiDiv(pub_model.cpu(), pred.cpu(), alpha=2*alpha)).item()
-    return pred, loss, lambd
+    pred = lambdas * priv_model + (1-lambdas) * pub_model
+    #loss = max(renyiDiv(pred.cpu(), pub_model.cpu(), alpha=2*alpha),
+    #           renyiDiv(pub_model.cpu(), pred.cpu(), alpha=2*alpha)).item()
+    loss = calc_priv_loss(pub_model, pred) 
+    return pred, loss, lambdas.cpu().mean()
 
 def lambda_solver_bisection(p_priv, p_pub, target, alpha, ):
     def f(lambd):
@@ -232,9 +234,27 @@ def lambda_solver_bisection(p_priv, p_pub, target, alpha, ):
         lambd = bisect(f, 0, 1, maxiter=10, disp=False)
     return lambd
 
+def lambda_solver(p_priv, p_pub, target, device):
+    lambdas = []
+    val_1 = ((np.exp(target) - 1) * p_pub) / (p_priv - p_pub)
+    val_2 = ((1 / np.exp(target) - 1) * p_pub)  / (p_priv - p_pub)
+    val = torch.max(val_1, val_2)
+    val = torch.min(val, torch.ones(val.size()[0]).to(device))
+    val = torch.nan_to_num(val, nan=0.0)
+    return val
+    '''
+    for i in range(p_priv.size()[0]):
+        val_1 = ((np.exp(target) - 1) * p_pub[i]) / (p_priv[i] - p_pub[i])
+        val_2 = ((1 / np.exp(target) - 1) * p_pub[i])  / (p_priv[i] - p_pub[i])
+        val = max(val_1, val_2)
+        val = min(val, 1)
+        lambdas.append(val)
+    return torch.tensor(lambdas).to(device)
+    ''' 
+
 def calc_priv_loss(p_pub, pred):
-    ind = torch.nonzero(p_pub)
-    loss = torch.max(torch.max(p_pub[ind]/pred[ind]), torch.max(pred[ind]/p_pub[ind]))
+    inds = torch.nonzero(p_pub)
+    loss = torch.max(torch.max(p_pub[inds]/pred[inds]), torch.max(pred[inds]/p_pub[inds]))
     return (torch.log(loss)**2) / 2
 
 def renyiDiv(p, q, alpha=float('inf')):
@@ -275,7 +295,7 @@ if __name__ == "__main__":
     priv_ppl_list = []
     dpsgd_ppl_list = []
     mix_ppl_list = []
-    for i in tqdm.tqdm(range(0, 20)):
+    for i in tqdm.tqdm(range(0, 10)):
         args.seed = i 
         ground_ppl, pub_ppl, priv_ppl, dpsgd_ppl, mix_ppl = main(args)
         if np.isnan(pub_ppl):
