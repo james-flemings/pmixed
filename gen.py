@@ -96,7 +96,8 @@ def main(args):
                 mix_pub_logits = pub_model(mix_input_ids).logits.squeeze()[-1:, :]
                 mix_priv_logits = priv_model(mix_input_ids).logits.squeeze()[-1:, :]
 
-                pub_logits_filtered, _ = top_p_filtering(pub_logits.clone(), args.p)
+                #pub_logits_filtered, _ = top_p_filtering(pub_logits.clone(), args.p)
+                pub_logits_filtered, = pub_logits.clone() / args.temperature
                 priv_logits_filtered, _ = top_p_filtering(priv_logits.clone(), args.p)
                 dpsgd_logits_filtered, _ = top_p_filtering(dpsgd_logits.clone(), args.p)
                 #mix_pub_logits_filtered, inds = top_p_filtering(mix_pub_logits.clone(), args.p)
@@ -247,9 +248,9 @@ def renyiDiv(p, q, alpha=float('inf')):
     elif alpha == 1:
         RD = torch.sum(p*torch.log(p/q))
     else:
-        #inds = torch.nonzero(q)
+        inds = torch.nonzero(q**(alpha-1))
         RD = 1/(alpha-1)*torch.log(
-            torch.sum((p**alpha)/(q**(alpha-1))))
+            torch.sum((p[inds]**alpha)/(q[inds]**(alpha-1))))
     if torch.isnan(RD):
         RD = torch.log(torch.max(p/q))
     return RD 
@@ -262,13 +263,13 @@ if __name__ == "__main__":
     parser.add_argument("--model_name", type=str, default="GPT2")
     parser.add_argument("--p", type=float, default=1.0)
     parser.add_argument("--k", type=int, default=40)
-    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--seq_length", type=int, default=512)
     parser.add_argument("--dataset", type=str, default="wikitext")
     parser.add_argument("--data_subset", type=str, default="wikitext-103-v1")
     parser.add_argument("--start_context", type=int, default=32)
     parser.add_argument("--max_length", type=int, default=150)
-    parser.add_argument("--temperature", type=int, default=0.9)
+    parser.add_argument("--temperature", type=float, default=0.8)
     args = parser.parse_args()
 
     ground_ppl_list = []

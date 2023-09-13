@@ -106,7 +106,7 @@ def main():
             pub_output_logits_filtered, inds = top_k_filtering(pub_output_logits.clone().squeeze(), 200) 
             pub_output_softmax = nn.functional.softmax(pub_output_logits.squeeze() / args.temperature )
 
-            fine_tuned_output_logits_filtered = top_p_filtering(fine_tuned_output_logits.squeeze().clone() / args.temperature, 0.98)
+            fine_tuned_output_logits_filtered = top_p_filtering(fine_tuned_output_logits.squeeze().clone(), 0.95)
             fine_tuned_output_softmax = nn.functional.softmax(fine_tuned_output_logits_filtered)
 
             output_dists = priv_ensemble.pred_dist(input_ids)
