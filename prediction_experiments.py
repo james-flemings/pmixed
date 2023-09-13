@@ -28,8 +28,8 @@ parser.add_argument("--query_budget", type=int, default=512)
 parser.add_argument("--target_multiplier", type=float, default=1.0)
 parser.add_argument("--epsilon", type=float, default=1.0)
 parser.add_argument("--alpha", type=float, default=2)
-parser.add_argument("--temperature", type=float, default=0.90)
-parser.add_argument("--p_value", type=float, default=1.)
+parser.add_argument("--temperature", type=float, default=0.95)
+parser.add_argument("--p_value", type=float, default=0.95)
 parser.add_argument("--e_value", type=float, default=0.01)
 
 def main():
@@ -53,8 +53,7 @@ def main():
     #                                                pad_token_id=tokenizer.eos_token_id).to(
     #                                                args.device)
 
-    fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.data_subset}")
-    #fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-wikitext-103-v1")
+    fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.data_subset}/checkpoint-3582")
     fine_tuned_model = PeftModel.from_pretrained(copy.deepcopy(priv_ensemble.pub_model),
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
@@ -87,12 +86,12 @@ def main():
     dp_fine_tuned_neg_log_likelihood = []
     ensemble_neg_log_likelihood= []
     priv_neg_log_likelihood= []
-    test_loader = DataLoader(test_data)#, shuffle=True)
+    test_loader = DataLoader(test_data, shuffle=True)
     priv_loss = []
     lambdas = []
     left_over = 0
     epsilon = args.epsilon * (args.alpha - 1) / (args.alpha - 3/4)
-    target = np.sqrt(epsilon / args.query_budget)
+    target = epsilon / args.query_budget
 
     fine_tuned_model.eval()
 
@@ -100,43 +99,34 @@ def main():
         labels = data['labels'].to(args.device)
         input_ids = data['input_ids'].to(args.device)
         with torch.no_grad():
-            pub_output_logits = priv_ensemble.pub_model(input_ids).logits
-            fine_tuned_output_logits =fine_tuned_model(input_ids).logits
-            dp_fine_tuned_output_logits = dp_fine_tuned_model(input_ids).logits
-            #pub_output_softmax = nn.functional.softmax(pub_output_logits.squeeze()/args.temperature)
-            #fine_tuned_output_softmax = nn.functional.softmax(fine_tuned_output_logits.squeeze()/args.temperature)
-            #fine_tuned_output_logits_filtered = top_p_filtering(fine_tuned_output_logits.clone().squeeze(), args.p_value) 
-            #fine_tuned_output_logits_filtered = epsilon_filtering(fine_tuned_output_logits.clone().squeeze(), args.e_value) 
-            #fine_tuned_output_softmax = nn.functional.softmax(fine_tuned_output_logits_filtered/args.temperature)
-            #pub_output_logits_filtered = top_p_filtering(pub_output_logits.clone().squeeze(), 0.99) 
-            #pub_output_logits_filtered = epsilon_filtering(pub_output_logits.clone().squeeze(), args.e_value) 
-            #pub_output_softmax = nn.functional.softmax(pub_output_logits_filtered/args.temperature)
+            pub_output_logits = priv_ensemble.pub_model(input_ids).logits 
+            fine_tuned_output_logits =fine_tuned_model(input_ids).logits 
+            dp_fine_tuned_output_logits = dp_fine_tuned_model(input_ids).logits 
 
-            #pub_output_logits_filtered, inds = top_k_filtering(pub_output_logits.clone().squeeze(), 200) 
-            pub_output_softmax = nn.functional.softmax(pub_output_logits.squeeze())
+            pub_output_logits_filtered, inds = top_k_filtering(pub_output_logits.clone().squeeze(), 200) 
+            pub_output_softmax = nn.functional.softmax(pub_output_logits.squeeze() / args.temperature )
 
-            fine_tuned_output_logits_filtered, _ = top_k_filtering(fine_tuned_output_logits.squeeze().clone(), 400)
-            #fine_tuned_output_logits_filtered[inds] = -float("Inf")
-            fine_tuned_output_softmax = nn.functional.softmax(fine_tuned_output_logits.squeeze())
+            fine_tuned_output_logits_filtered = top_p_filtering(fine_tuned_output_logits.squeeze().clone() / args.temperature, 0.98)
+            fine_tuned_output_softmax = nn.functional.softmax(fine_tuned_output_logits_filtered)
 
-            #output_dists = priv_ensemble.pred_dist(input_ids)
+            output_dists = priv_ensemble.pred_dist(input_ids)
             ensemble_logits = []
             priv_logits = []
 
             if i < args.query_budget // seq_length:
                 for j in tqdm.tqdm(range(seq_length)):
-                    #token_softmax = [output_dist[j] for output_dist in output_dists]
-                    #ensemble_output_dist = priv_ensemble.priv_pred(token_softmax)
-                    #ensemble_logits.append(torch.log(ensemble_output_dist))
-                    priv_pred, loss, lambd, COUNT = private_pred(fine_tuned_output_softmax[j], pub_output_softmax[j],
-                                             target, COUNT, args.alpha, args.device)
-                    priv_logits.append(torch.log(priv_pred))
+                    token_softmax = [output_dist[j] for output_dist in output_dists]
+                    ensemble_output_dist = priv_ensemble.priv_pred(token_softmax)
+                    ensemble_logits.append(torch.log(ensemble_output_dist.cpu()))
+                    priv_pred, loss, lambd  = private_pred(fine_tuned_output_softmax[j], pub_output_softmax[j],
+                                             target, args.alpha, args.device)
                     #left_over += (target/2 - loss)
+                    priv_logits.append(torch.log(priv_pred))
                     priv_loss.append(loss)
                     lambdas.append(lambd)
 
-                #ensemble_logits = torch.stack(ensemble_logits)
-                #ensemble_neg_log_likelihood.append(calc_loss(ensemble_logits, labels))
+                ensemble_logits = torch.stack(ensemble_logits)
+                ensemble_neg_log_likelihood.append(calc_loss(ensemble_logits, labels.cpu()))
                 priv_logits = torch.stack(priv_logits)
                 priv_neg_log_likelihood.append(calc_loss(priv_logits, labels))
             else:
@@ -149,14 +139,14 @@ def main():
     pre_trained_ppl = torch.exp(torch.stack(pub_neg_log_likelihood))
     fine_tuned_ppl = torch.exp(torch.stack(fine_tuned_neg_log_likelihood))
     dp_fine_tuned_ppl = torch.exp(torch.stack(dp_fine_tuned_neg_log_likelihood))
-    #ensemble_ppl = torch.exp(torch.stack(ensemble_neg_log_likelihood))
+    ensemble_ppl = torch.exp(torch.stack(ensemble_neg_log_likelihood))
     priv_ppl = torch.exp(torch.stack(priv_neg_log_likelihood))
 
     print(f"Perplexity score for Pre-Trained Model: {pre_trained_ppl.mean():.2f}")
     print(f"Perplexity score for Fine-Tuned Model: {fine_tuned_ppl.mean():.2f}")
     print(f"Perplexity score for DP-Fine-Tuned Model: {dp_fine_tuned_ppl.mean():.2f}")
     print(f"Perplexity score for Private Prediction Model: {priv_ppl.mean():.2f}")
-    #print(f"Perplexity score for Ensemble Private Prediction Model: {ensemble_ppl.mean():.2f}")
+    print(f"Perplexity score for Ensemble Private Prediction Model: {ensemble_ppl.mean():.2f}")
 
     print(f"Total privacy loss of model: {sum(priv_loss):.4f}")
     print(f"Max loss", max(priv_loss))
@@ -166,10 +156,10 @@ def main():
 
     print("Count ", COUNT)
 
-    #priv_ensemble.print_priv_losses()
-    #priv_ensemble.print_lambdas()
-    #priv_ensemble.plot_individual_loss()
-    #priv_ensemble.plot_lambdas()
+    priv_ensemble.print_priv_losses()
+    priv_ensemble.print_lambdas()
+    priv_ensemble.plot_individual_loss()
+    priv_ensemble.plot_lambdas()
     #plot_ppl(ensemble_ppl)
 
 def calc_loss(logits, labels):
@@ -184,34 +174,31 @@ def plot_ppl(ppl_scores):
     plt.savefig(os.path.join("plt", "ensemble_perplexity_scores.png"))
     plt.clf()
 
-def private_pred(priv_model, pub_model, target, count, alpha=2, device="cpu"):
-    #lambd = lambda_solver_bisection(priv_model.cpu(), pub_model.cpu(), target, 2*alpha)
-    lambdas = lambda_solver(priv_model, pub_model, target, device)
+def private_pred(priv_model, pub_model, target, alpha=2, device="cpu"):
+    lambd = lambda_solver_bisection(priv_model.cpu(), pub_model.cpu(), target, 2*alpha)
+    #lambdas = lambda_solver(priv_model, pub_model, target, device)
     #lambd = 0.1
-    pred = lambdas * priv_model + (1-lambdas) * pub_model
-    #loss = max(renyiDiv(pred.cpu(), pub_model.cpu(), alpha=2*alpha),
-    #           renyiDiv(pub_model.cpu(), pred.cpu(), alpha=2*alpha)).item()
-    loss = calc_priv_loss(pub_model, pred) 
-    return pred, loss, lambdas.cpu().mean(), count
+    pred = lambd * priv_model + (1-lambd) * pub_model
+    loss = max(renyiDiv(pred.cpu(), pub_model.cpu(), alpha=2*alpha),
+               renyiDiv(pub_model.cpu(), pred.cpu(), alpha=2*alpha)).item()
+    #loss = calc_priv_loss(pub_model, pred) 
+    return pred, loss, lambd
 
 def lambda_solver_bisection(p_priv, p_pub, target, alpha):
     def f(lambd):
-        lambd = torch.tensor(lambd)
         pred = lambd * p_priv + (1-lambd) * p_pub
         eps = max(renyiDiv(pred, p_pub, alpha=alpha), renyiDiv(p_pub, pred, alpha=alpha))
         return (eps - target/2)
-
-    #if f(1) <= 0.0:
-    #    lambd = 1 
-    #else:
-        #lambd = bisect(f, np.zeros(p_pub.size()[0]), np.ones(p_pub.size()[0]), maxiter=10, disp=False)
-    lambd = minimize(f, np.zeros(p_pub.size()[0]), options={"maxiter": 10, "disp": False})
+    if f(1) <= 0.0:
+        lambd = 1 
+    else:
+        lambd = bisect(f, 0, 1, maxiter=20, disp=False)
     return lambd
 
 def lambda_solver(p_priv, p_pub, target, device):
     lambdas = []
-    val_1 = ((np.exp(target) - 1) * p_pub) / (p_priv - p_pub)
-    val_2 = ((1 / np.exp(target) - 1) * p_pub)  / (p_priv - p_pub)
+    val_1 = ((np.exp(target/2) - 1) * p_pub) / (p_priv - p_pub)
+    val_2 = ((1 / np.exp(target/2) - 1) * p_pub)  / (p_priv - p_pub)
     val = torch.max(val_1, val_2)
     val = torch.min(val, torch.ones(val.size()[0]).to(device))
     return val
@@ -219,7 +206,7 @@ def lambda_solver(p_priv, p_pub, target, device):
 def calc_priv_loss(p_pub, pred):
     ind = torch.nonzero(p_pub)
     loss = torch.max(torch.max(p_pub[ind]/pred[ind]), torch.max(pred[ind]/p_pub[ind]))
-    return (torch.log(loss)**2) / 2
+    return (2 * torch.log(loss)**2) 
 
 def renyiDiv(p, q, alpha=float('inf')):
     if alpha == float('inf'):
@@ -227,11 +214,9 @@ def renyiDiv(p, q, alpha=float('inf')):
     elif alpha == 1:
         RD = torch.sum(p*torch.log(p/q))
     else:
-        inds = torch.nonzero(q)
-        #r = (p[inds]**alpha)/(q[inds]**(alpha-1))
-        #RD = 1/(alpha-1)*torch.log(torch.sum(r))
+        #inds = torch.nonzero(q)
         RD = 1/(alpha-1)*torch.log(
-            torch.sum((p[inds]**alpha)/(q[inds]**(alpha-1))))
+            torch.sum((p**alpha)/(q**(alpha-1))))
     if torch.isnan(RD):
         RD = torch.log(torch.max(p/q))
     return RD 

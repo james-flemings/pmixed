@@ -30,7 +30,7 @@ class Ensemble():
         self.personalized_priv_loss = [[] for _ in range(self.num_ensemble)]
         self.left_over_priv_loss = [0 for _ in range(self.num_ensemble)]
         self.pairings = [(i, i+1) for i in range(0, self.num_ensemble, 2)]
-        self.target = self.eps / self.q_budget
+        self.target = np.sqrt(self.eps / self.q_budget)
         self.lambda_history = []
 
         self.lora_ensemble = 0 
@@ -62,10 +62,10 @@ class Ensemble():
         output_dists = []
         for i in range(self.num_ensemble):
             self.lora_ensemble.set_adapter(f"lora-{i}")
-            logits = self.lora_ensemble(context).logits.squeeze()
-            logits_filtered = self.top_p_filtering(logits.clone(), self.p_value)
-            output_dists.append(F.softmax(logits_filtered))
-        logits = self.pub_model(context).logits.squeeze()
+            logits = self.lora_ensemble(context).logits.squeeze().cpu()
+            #logits_filtered = self.top_p_filtering(logits.clone(), self.p_value)
+            output_dists.append(F.softmax(logits))
+        logits = self.pub_model(context).logits.squeeze().cpu()
         #logits_filtered = self.top_p_filtering(logits.clone(), 0.99)
         output_dists.append(F.softmax(logits))
         #output_dists.append(F.softmax(logits))
@@ -89,27 +89,31 @@ class Ensemble():
         return logits
 
     def priv_pred(self, output_dists):
-        self.lambdas = [self.lambda_solver_bisection(output_dists[i].cpu(),
-                                                    output_dists[self.num_ensemble].cpu(),
-                                                    i
+        self.lambdas = [self.lambda_solver(output_dists[i],
+                                                    output_dists[self.num_ensemble],
                                                     ) for i in range(self.num_ensemble)]
         #self.lambdas = [0.1 for i in range(self.num_ensemble)]
-        self.lambda_history.append(np.mean(self.lambdas))
+        self.lambda_history.append(np.mean([lambd.cpu() for lambd in self.lambdas]))
         mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[i])
                        for i in range(self.num_ensemble)]
 
         mixed_dists = torch.stack(mixed_dists)
-        ensemble_dist = torch.mean(mixed_dists, dim=0) 
+        ensemble_dist = torch.mean(mixed_dists[3:], dim=0) 
         pub_pred = output_dists[self.num_ensemble]
-        losses = [max(self.renyiDiv(mix_dist.cpu(), pub_pred.cpu(), alpha=2*self.alpha),
-               self.renyiDiv(pub_pred.cpu(), mix_dist.cpu(), alpha=2*self.alpha)) for mix_dist in mixed_dists]
-        #losses = [self.calc_priv_loss(mix_dist, pub_pred) for mix_dist in mixed_dists]
+        #losses = [max(self.renyiDiv(mix_dist.cpu(), pub_pred.cpu(), alpha=2*self.alpha),
+        #       self.renyiDiv(pub_pred.cpu(), mix_dist.cpu(), alpha=2*self.alpha)) for mix_dist in mixed_dists]
+        losses = [self.calc_priv_loss(mix_dist, pub_pred) for mix_dist in mixed_dists]
         
         for i, loss in enumerate(losses):
             self.personalized_priv_loss[i].append(loss.cpu())
-            self.left_over_priv_loss[i] += (self.target/2 - loss.cpu().item())
+            #self.left_over_priv_loss[i] += (self.target/2 - loss.cpu().item())
         
         return ensemble_dist 
+
+    def calc_priv_loss(self, p_pub, pred):
+        #ind = torch.nonzero(p_pub)
+        loss = torch.max(torch.max(p_pub/pred), torch.max(pred/p_pub))
+        return 2*(torch.log(loss)**2) 
 
     def lambda_solver_bisection(self, p_priv, p_pub, i):
         def f(lambd):
@@ -123,6 +127,14 @@ class Ensemble():
         else:
             lambd = bisect(f, 0, 1, maxiter=10, disp=False)
         return lambd
+
+    def lambda_solver(self, p_priv, p_pub):
+        lambdas = []
+        val_1 = ((np.exp(self.target/2) - 1) * p_pub) / (p_priv - p_pub)
+        val_2 = ((1 / np.exp(self.target/2) - 1) * p_pub)  / (p_priv - p_pub)
+        val = torch.max(val_1, val_2)
+        val = torch.min(val, torch.ones(val.size()[0]))
+        return val
 
     def mix(self, p, p_prime, lambd=0.5):
         return (lambd * p + (1-lambd) * p_prime)

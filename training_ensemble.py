@@ -26,7 +26,7 @@ parser.add_argument("--model_name", type=str, default="GPT2")
 parser.add_argument("--dataset", type=str, default="wikitext")
 parser.add_argument("--subset", type=str, default="wikitext-103-v1")
 parser.add_argument("--num_ensemble", type=int, default=8)
-parser.add_argument("--epochs", type=int, default=3)
+parser.add_argument("--epochs", type=int, default=1)
 parser.add_argument("--lora_r", type=int, default=4)
 parser.add_argument("--lora_alpha", type=int, default=32)
 parser.add_argument("--lora_dropout", type=float, default=0.1)
@@ -80,6 +80,7 @@ def init_training():
 
 def train_ensemble():
     lm_dataset, tokenizer, pretrained_model = init_training()
+    print("Num epochs", args.epochs)
     for i in range(START, args.num_ensemble):
         lm_shards = {} 
         if args.num_ensemble == 1:
