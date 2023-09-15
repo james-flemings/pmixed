@@ -16,30 +16,17 @@ from scipy.optimize import bisect, minimize
 import numpy as np
 import math
 
-set_seed(1)
-
 def main(args):
-    COUNT = 0
+    set_seed(args.seed)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     model_dir = os.path.join("models", f"{args.num_ensemble}_ensemble")
 
-    model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-wikitext-103-raw-v1")
-                    for i in range(args.num_ensemble)]
-    priv_ensemble = Ensemble(model_paths,
-                             args.model_name,
-                             tokenizer,
-                             args.device,
-                             q_budget=args.query_budget,
-                             eps=args.epsilon,
-                             target_mult=args.target_multiplier,
-                             p_value=args.p_value)
-
-    #pub_model = AutoModelForCausalLM.from_pretrained(args.model_name,
-    #                                                pad_token_id=tokenizer.eos_token_id).to(
-    #                                                args.device)
+    pub_model = AutoModelForCausalLM.from_pretrained(args.model_name,
+                                                    pad_token_id=tokenizer.eos_token_id).to(
+                                                    args.device)
 
     fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.data_subset}/checkpoint-3582")
-    fine_tuned_model = PeftModel.from_pretrained(copy.deepcopy(priv_ensemble.pub_model),
+    fine_tuned_model = PeftModel.from_pretrained(copy.deepcopy(pub_model),
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
@@ -69,50 +56,34 @@ def main(args):
     pub_neg_log_likelihood = []
     fine_tuned_neg_log_likelihood = []
     dp_fine_tuned_neg_log_likelihood = []
-    ensemble_neg_log_likelihood= []
     priv_neg_log_likelihood= []
     test_loader = DataLoader(test_data, shuffle=True)
     priv_loss = []
     lambdas = []
-    left_over = 0
-    target = args.epsilon / (args.query_budget * args.alpha)
-    alpha = 2 *
+    alpha = math.ceil(2 * np.log(1/args.delta) / args.epsilon + 1)
+    epsilon = args.epsilon - args.epsilon / 2
     fine_tuned_model.eval()
 
     for i, data in enumerate(tqdm.tqdm(test_loader)):
         labels = data['labels'].to(args.device)
         input_ids = data['input_ids'].to(args.device)
         with torch.no_grad():
-            pub_output_logits = priv_ensemble.pub_model(input_ids).logits 
+            pub_output_logits = pub_model(input_ids).logits 
             fine_tuned_output_logits =fine_tuned_model(input_ids).logits 
             dp_fine_tuned_output_logits = dp_fine_tuned_model(input_ids).logits 
 
-            fine_tuned_output_logits_filtered, inds = top_p_filtering(fine_tuned_output_logits.squeeze().clone(), 0.95)
-            #fine_tuned_output_logits_filtered = pub_output_logits.squeeze().clone() / args.temperature
-            #fine_tuned_output_logits_filtered[inds] = -float("Inf")
             fine_tuned_output_softmax = nn.functional.softmax(fine_tuned_output_logits.squeeze())
-
-            #pub_output_logits_filtered, _ = top_p_filtering(pub_output_logits.clone().squeeze(), 0.95) 
             pub_output_softmax = nn.functional.softmax(pub_output_logits.squeeze() / args.temperature)
-
-            #output_dists = priv_ensemble.pred_dist(input_ids)
-            ensemble_logits = []
             priv_logits = []
 
             if i < args.query_budget // seq_length:
                 for j in tqdm.tqdm(range(seq_length)):
-                    #token_softmax = [output_dist[j] for output_dist in output_dists]
-                    #ensemble_output_dist = priv_ensemble.priv_pred(token_softmax)
-                    #ensemble_logits.append(torch.log(ensemble_output_dist.cpu()))
                     priv_pred, loss, lambd  = private_pred(fine_tuned_output_softmax[j], pub_output_softmax[j],
-                                             args.epsilon, args.query_budget, args.alpha, args.device)
-                    #left_over += (target/2 - loss)
+                                             epsilon, args.query_budget, alpha, args.device)
                     priv_logits.append(torch.log(priv_pred))
                     priv_loss.append(loss)
                     lambdas.append(lambd)
 
-                #ensemble_logits = torch.stack(ensemble_logits)
-                #ensemble_neg_log_likelihood.append(calc_loss(ensemble_logits, labels.cpu()))
                 priv_logits = torch.stack(priv_logits)
                 priv_neg_log_likelihood.append(calc_loss(priv_logits, labels))
             else:
@@ -125,14 +96,12 @@ def main(args):
     pre_trained_ppl = torch.exp(torch.stack(pub_neg_log_likelihood))
     fine_tuned_ppl = torch.exp(torch.stack(fine_tuned_neg_log_likelihood))
     dp_fine_tuned_ppl = torch.exp(torch.stack(dp_fine_tuned_neg_log_likelihood))
-    #ensemble_ppl = torch.exp(torch.stack(ensemble_neg_log_likelihood))
     priv_ppl = torch.exp(torch.stack(priv_neg_log_likelihood))
 
     print(f"Perplexity score for Pre-Trained Model: {pre_trained_ppl.mean():.2f}")
     print(f"Perplexity score for Fine-Tuned Model: {fine_tuned_ppl.mean():.2f}")
     print(f"Perplexity score for DP-Fine-Tuned Model: {dp_fine_tuned_ppl.mean():.2f}")
     print(f"Perplexity score for Private Prediction Model: {priv_ppl.mean():.2f}")
-    #print(f"Perplexity score for Ensemble Private Prediction Model: {ensemble_ppl.mean():.2f}")
 
     print(f"Total privacy loss of model: {sum(priv_loss):.4f}")
     print(f"Max loss", max(priv_loss))
@@ -140,11 +109,7 @@ def main(args):
     print(f"Min lambda: {np.min(lambdas)}")
     print(f"Max lambda: {np.max(lambdas)}")
 
-    #priv_ensemble.print_priv_losses()
-    #priv_ensemble.print_lambdas()
-    #priv_ensemble.plot_individual_loss()
-    #priv_ensemble.plot_lambdas()
-    #plot_ppl(ensemble_ppl)
+    return pre_trained_ppl.mean().cpu(), fine_tuned_ppl.mean().cpu(), dp_fine_tuned_ppl.mean().cpu(), priv_ppl.mean().cpu()
 
 def calc_loss(logits, labels):
     shift_logits = logits[..., :-1, :].contiguous()
@@ -160,8 +125,6 @@ def plot_ppl(ppl_scores):
 
 def private_pred(priv_model, pub_model, epsilon, budget, alpha=2, device="cpu"):
     lambd = lambda_solver_bisection(priv_model.cpu(), pub_model.cpu(), epsilon, budget, alpha)
-    #lambdas = lambda_solver(priv_model, pub_model, target, device)
-    #lambd = 0.1
     pred = lambd * priv_model + (1-lambd) * pub_model
     loss = min(data_independent_loss(pred, pub_model, alpha),
                 data_dependent_loss(epsilon, budget, pred.cpu(), alpha))
@@ -170,7 +133,6 @@ def private_pred(priv_model, pub_model, epsilon, budget, alpha=2, device="cpu"):
 def lambda_solver_bisection(p_priv, p_pub, epsilon, budget, alpha):
     def f(lambd):
         pred = lambd * p_priv + (1-lambd) * p_pub
-        #eps = max(renyiDiv(pred, p_pub, alpha=alpha), renyiDiv(p_pub, pred, alpha=alpha))
         eps = min(data_independent_loss(pred, p_pub, alpha), data_dependent_loss(epsilon, budget, pred, alpha))
         return (eps - epsilon/budget)
     if f(1) <= 0.0:
@@ -178,14 +140,6 @@ def lambda_solver_bisection(p_priv, p_pub, epsilon, budget, alpha):
     else:
         lambd = bisect(f, 0, 1, maxiter=20, disp=False)
     return lambd
-
-def lambda_solver(p_priv, p_pub, target, device):
-    lambdas = []
-    val_1 = ((np.exp(target/2) - 1) * p_pub) / (p_priv - p_pub)
-    val_2 = ((1 / np.exp(target/2) - 1) * p_pub)  / (p_priv - p_pub)
-    val = torch.max(val_1, val_2)
-    val = torch.min(val, torch.ones(val.size()[0]).to(device))
-    return val
 
 def calc_priv_loss(p_pub, pred):
     ind = torch.nonzero(p_pub)
@@ -215,9 +169,8 @@ def data_dependent_loss(epsilon, budget, pred, alpha):
     alpha_1 = 1 + alpha_2
     epsilon_1 = epsilon / budget * alpha_1
     epsilon_2 = epsilon / budget * alpha_2
-
-    if alpha_1 > alpha or alpha_2 <= 1:
-        return torch(float('Inf'))
+    if alpha_1 < alpha or alpha_2 <= 1:
+        return torch.tensor((float('Inf')))
 
     A = (1-q) / (1 - (q*np.exp(epsilon_2))**((alpha_2-1)/alpha_2))
     B = np.exp(epsilon_1)/(q**(1/(alpha_1 - 1)))
@@ -267,9 +220,25 @@ if __name__ == "__main__":
     parser.add_argument("--target_multiplier", type=float, default=1.0)
     parser.add_argument("--epsilon", type=float, default=1.0)
     parser.add_argument("--alpha", type=float, default=2)
+    parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--temperature", type=float, default=0.95)
     parser.add_argument("--p_value", type=float, default=0.95)
     parser.add_argument("--e_value", type=float, default=0.01)
     args = parser.parse_args()
 
-    main(args)
+    pub_ppl_list = []
+    priv_ppl_list = []
+    dpsgd_ppl_list = []
+    mix_ppl_list = []
+    for i in tqdm.tqdm(range(0, 10)):
+        args.seed = i 
+        pub_ppl, priv_ppl, dpsgd_ppl, mix_ppl = main(args)
+        pub_ppl_list.append(pub_ppl)
+        priv_ppl_list.append(priv_ppl)
+        dpsgd_ppl_list.append(dpsgd_ppl)
+        mix_ppl_list.append(mix_ppl)
+
+    print(f"Final Perplexity score for Pre-Trained Model: {np.mean(pub_ppl_list):.2f}")
+    print(f"Final Perplexity score for Fine-Tuned Model: {np.mean(priv_ppl_list):.2f}")
+    print(f"Final Perplexity score for DP-Fine-Tuned Model: {np.mean(dpsgd_ppl_list):.2f}")
+    print(f"Final Perplexity score for Mix Model: {np.mean(mix_ppl_list):.2f}")
