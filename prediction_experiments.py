@@ -18,24 +18,8 @@ import math
 
 set_seed(1)
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--num_ensemble", type=int, default=8)
-parser.add_argument("--model_name", type=str, default="GPT2")
-parser.add_argument("--dataset", type=str, default="wikitext")
-parser.add_argument("--data_subset", type=str, default="wikitext-103-v1")
-parser.add_argument("--device", type=str, default="cuda:6")
-parser.add_argument("--seq_length", type=int, default=512)
-parser.add_argument("--query_budget", type=int, default=1024)
-parser.add_argument("--target_multiplier", type=float, default=1.0)
-parser.add_argument("--epsilon", type=float, default=1.0)
-parser.add_argument("--alpha", type=float, default=2)
-parser.add_argument("--temperature", type=float, default=0.95)
-parser.add_argument("--p_value", type=float, default=0.95)
-parser.add_argument("--e_value", type=float, default=0.01)
-
-def main():
+def main(args):
     COUNT = 0
-    args = parser.parse_args()
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     model_dir = os.path.join("models", f"{args.num_ensemble}_ensemble")
 
@@ -92,7 +76,7 @@ def main():
     lambdas = []
     left_over = 0
     target = args.epsilon / (args.query_budget * args.alpha)
-
+    alpha = 2 *
     fine_tuned_model.eval()
 
     for i, data in enumerate(tqdm.tqdm(test_loader)):
@@ -272,4 +256,20 @@ def top_k_filtering(logits, top_k, filter_value=-float("Inf")):
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--num_ensemble", type=int, default=8)
+    parser.add_argument("--model_name", type=str, default="GPT2")
+    parser.add_argument("--dataset", type=str, default="wikitext")
+    parser.add_argument("--data_subset", type=str, default="wikitext-103-v1")
+    parser.add_argument("--device", type=str, default="cuda:6")
+    parser.add_argument("--seq_length", type=int, default=512)
+    parser.add_argument("--query_budget", type=int, default=1024)
+    parser.add_argument("--target_multiplier", type=float, default=1.0)
+    parser.add_argument("--epsilon", type=float, default=1.0)
+    parser.add_argument("--alpha", type=float, default=2)
+    parser.add_argument("--temperature", type=float, default=0.95)
+    parser.add_argument("--p_value", type=float, default=0.95)
+    parser.add_argument("--e_value", type=float, default=0.01)
+    args = parser.parse_args()
+
+    main(args)

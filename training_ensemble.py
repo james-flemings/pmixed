@@ -19,45 +19,8 @@ import numpy as np
 import argparse
 import tqdm
 
-#set_seed(0)
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--model_name", type=str, default="GPT2")
-parser.add_argument("--dataset", type=str, default="wikitext")
-parser.add_argument("--subset", type=str, default="wikitext-103-v1")
-parser.add_argument("--num_ensemble", type=int, default=8)
-parser.add_argument("--epochs", type=int, default=1)
-parser.add_argument("--lora_r", type=int, default=4)
-parser.add_argument("--lora_alpha", type=int, default=32)
-parser.add_argument("--lora_dropout", type=float, default=0.1)
-parser.add_argument("--block_size", type=int, default=512)
-parser.add_argument("--learning_rate", type=float, default=2e-4)
-parser.add_argument("--weight_decay", type=float, default=0.01)
-parser.add_argument("--batch_size", type=int, default=8)
-parser.add_argument("--dp_batch_size", type=int, default=32)
-parser.add_argument("--training_type", type=str, default="sub-samp-and-agg")
-parser.add_argument("--device", type=str, default="cuda:0")
-parser.add_argument("--noise_multiplier", type=float, default=1.)
-parser.add_argument("--max_grad_norm", type=float, default=0.1)
-parser.add_argument("--epsilon", type=float, default=1.)
-parser.add_argument("--delta", type=float, default=1e-5)
-parser.add_argument("--num_gpus", type=int, default=1)
-
-
-args = parser.parse_args()
-
 START = 0 
-if not os.path.exists("models"):
-    os.mkdir("models")
-if args.num_ensemble == 1 or args.training_type == "dpsgd":
-    model_dir = "models"
-else:
-    model_dir = os.path.join("models", f"{args.num_ensemble}_ensemble")
-
-if not os.path.exists(model_dir):
-    os.mkdir(model_dir)
-
-def init_training():
+def init_training(args):
     tokenizer = GPT2Tokenizer.from_pretrained(args.model_name)
     pretrained_model = GPT2LMHeadModel.from_pretrained(args.model_name,
                         pad_token_id=tokenizer.eos_token_id)
@@ -78,8 +41,8 @@ def init_training():
     ) 
     return lm_dataset, tokenizer, pretrained_model
 
-def train_ensemble():
-    lm_dataset, tokenizer, pretrained_model = init_training()
+def train_ensemble(args):
+    lm_dataset, tokenizer, pretrained_model = init_training(args)
     print("Num epochs", args.epochs)
     for i in range(START, args.num_ensemble):
         lm_shards = {} 
@@ -146,7 +109,7 @@ def group_texts(examples, block_size):
     result["labels"] = result["input_ids"].copy()
     return result
 
-def init_dp_training(rank):
+def init_dp_training(rank, args):
     lm_dataset, tokenizer, pretrained_model = init_training()
     lora_config = LoraConfig(
         r=args.lora_r,
@@ -192,9 +155,9 @@ def init_dp_training(rank):
     )
     return model, optimizer, train_data_loader, val_data_loader, privacy_engine
 
-def dpsgd(rank, world_size):
+def dpsgd(rank, world_size, args):
     setup(rank, world_size)
-    model, optimizer, train_data_loader, val_data_loader, privacy_engine = init_dp_training(rank)
+    model, optimizer, train_data_loader, val_data_loader, privacy_engine = init_dp_training(rank, args)
     model.to(rank)
     model.train()
 
@@ -270,16 +233,47 @@ def print_trainable_parameters(model):
     f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
     )
 
-world_size = args.num_gpus
-
-
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_name", type=str, default="GPT2")
+    parser.add_argument("--dataset", type=str, default="wikitext")
+    parser.add_argument("--subset", type=str, default="wikitext-103-v1")
+    parser.add_argument("--num_ensemble", type=int, default=8)
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--lora_r", type=int, default=4)
+    parser.add_argument("--lora_alpha", type=int, default=32)
+    parser.add_argument("--lora_dropout", type=float, default=0.1)
+    parser.add_argument("--block_size", type=int, default=512)
+    parser.add_argument("--learning_rate", type=float, default=2e-4)
+    parser.add_argument("--weight_decay", type=float, default=0.01)
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--dp_batch_size", type=int, default=32)
+    parser.add_argument("--training_type", type=str, default="sub-samp-and-agg")
+    parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument("--noise_multiplier", type=float, default=1.)
+    parser.add_argument("--max_grad_norm", type=float, default=0.1)
+    parser.add_argument("--epsilon", type=float, default=1.)
+    parser.add_argument("--delta", type=float, default=1e-5)
+    parser.add_argument("--num_gpus", type=int, default=1)
+    args = parser.parse_args()
+    world_size = args.num_gpus
+
+    if not os.path.exists("models"):
+        os.mkdir("models")
+    if args.num_ensemble == 1 or args.training_type == "dpsgd":
+        model_dir = "models"
+    else:
+        model_dir = os.path.join("models", f"{args.num_ensemble}_ensemble")
+
+    if not os.path.exists(model_dir):
+        os.mkdir(model_dir)
+
     if args.training_type == "sub-samp-and-agg":
-        train_ensemble()
+        train_ensemble(args)
     elif args.training_type == "dpsgd":
         mp.spawn(
             dpsgd,
-            args=(world_size,),
+            args=(world_size, args),
             nprocs=world_size,
             join=True
         )
