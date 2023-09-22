@@ -41,7 +41,7 @@ def init_training(args):
     ) 
     return lm_dataset, tokenizer, pretrained_model
 
-def train_ensemble(args):
+def train_ensemble(args, model_dir):
     lm_dataset, tokenizer, pretrained_model = init_training(args)
     print("Num epochs", args.epochs)
     for i in range(START, args.num_ensemble):
@@ -110,7 +110,7 @@ def group_texts(examples, block_size):
     return result
 
 def init_dp_training(rank, args):
-    lm_dataset, tokenizer, pretrained_model = init_training()
+    lm_dataset, tokenizer, pretrained_model = init_training(args)
     lora_config = LoraConfig(
         r=args.lora_r,
         lora_alpha=args.lora_alpha,
@@ -120,15 +120,8 @@ def init_dp_training(rank, args):
     )
     lora_model = get_peft_model(pretrained_model, lora_config)
     model = DPDDP(lora_model)
-    optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, )
-    '''
-    optimizer = DistributedDPOptimizer(
-        optimizer=optimizer,
-        noise_multiplier=0.,
-        max_grad_norm=100.,
-        expected_batch_size=args.batch_size//world_size,
-    )
-    '''
+    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate,
+                           weight_decay=args.weight_decay)
     lm_dataset['train'].set_format(type='torch')
     lm_dataset['validation'].set_format(type='torch')
 
@@ -155,7 +148,7 @@ def init_dp_training(rank, args):
     )
     return model, optimizer, train_data_loader, val_data_loader, privacy_engine
 
-def dpsgd(rank, world_size, args):
+def dpsgd(rank, world_size, args, model_dir):
     setup(rank, world_size)
     model, optimizer, train_data_loader, val_data_loader, privacy_engine = init_dp_training(rank, args)
     model.to(rank)
@@ -188,9 +181,9 @@ def dpsgd(rank, world_size, args):
                     #f"Validation Loss: {np.mean(val_losses):.4f} | "
                     f"(ε = {epsilon:.2f})"
                 )
+            output_dir = os.path.join(model_dir, f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.subset}.pt")
+            torch.save(model._module, output_dir)
     cleanup()    
-    output_dir = os.path.join(model_dir, f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.subset}.pt")
-    torch.save(model._module, output_dir)
 
 def accuracy(preds, labels):
     return (preds == labels).mean()
@@ -234,6 +227,7 @@ def print_trainable_parameters(model):
     )
 
 if __name__ == "__main__":
+    set_seed(0)
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="GPT2")
     parser.add_argument("--dataset", type=str, default="wikitext")
@@ -269,11 +263,11 @@ if __name__ == "__main__":
         os.mkdir(model_dir)
 
     if args.training_type == "sub-samp-and-agg":
-        train_ensemble(args)
+        train_ensemble(args, model_dir)
     elif args.training_type == "dpsgd":
         mp.spawn(
             dpsgd,
-            args=(world_size, args),
+            args=(world_size, args, model_dir),
             nprocs=world_size,
             join=True
         )

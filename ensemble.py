@@ -27,10 +27,10 @@ class Ensemble():
         self.model_dirs = model_dirs
         self.num_ensemble = len(self.model_dirs)
         self.lambdas = np.array([1/4 for _ in range(self.num_ensemble)])
-        self.personalized_priv_loss = [[] for _ in range(self.num_ensemble)]
-        self.left_over_priv_loss = [0 for _ in range(self.num_ensemble)]
-        self.pairings = [(i, i+1) for i in range(0, self.num_ensemble, 2)]
-        self.target = np.sqrt(self.eps / self.q_budget)
+        self.priv_loss = []
+        self.left_over = 0
+        self.target = np.sqrt((2 * self.eps) / (self.q_budget * self.alpha))
+        #self.target = (self.eps ) / (self.q_budget )
         self.lambda_history = []
 
         self.lora_ensemble = 0 
@@ -51,9 +51,8 @@ class Ensemble():
         elif alpha == 1:
             RD = torch.sum(p*torch.log(p/q))
         else:
-            inds = torch.nonzero(q)
             RD = 1/(alpha-1)*torch.log(
-                torch.sum((p[inds]**alpha)/(q[inds]**(alpha-1))))
+                torch.sum((p**alpha)/(q**(alpha-1))))
         if torch.isnan(RD):
             RD = torch.log(torch.max(p/q))
         return RD 
@@ -63,12 +62,9 @@ class Ensemble():
         for i in range(self.num_ensemble):
             self.lora_ensemble.set_adapter(f"lora-{i}")
             logits = self.lora_ensemble(context).logits.squeeze().cpu()
-            #logits_filtered = self.top_p_filtering(logits.clone(), self.p_value)
             output_dists.append(F.softmax(logits))
         logits = self.pub_model(context).logits.squeeze().cpu()
-        #logits_filtered = self.top_p_filtering(logits.clone(), 0.99)
         output_dists.append(F.softmax(logits))
-        #output_dists.append(F.softmax(logits))
         return output_dists 
 
     def top_p_filtering(self, logits, p, filter_value=-float("Inf")):
@@ -89,76 +85,74 @@ class Ensemble():
         return logits
 
     def priv_pred(self, output_dists):
-        self.lambdas = [self.lambda_solver(output_dists[i],
+        self.lambdas = [self.lambda_solver_bisection(output_dists[i],
                                                     output_dists[self.num_ensemble],
                                                     ) for i in range(self.num_ensemble)]
         #self.lambdas = [0.1 for i in range(self.num_ensemble)]
-        self.lambda_history.append(np.mean([lambd.cpu() for lambd in self.lambdas]))
+        self.lambda_history.append(np.mean([lambd for lambd in self.lambdas]))
         mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[i])
                        for i in range(self.num_ensemble)]
 
-        mixed_dists = torch.stack(mixed_dists)
-        ensemble_dist = torch.mean(mixed_dists[3:], dim=0) 
-        pub_pred = output_dists[self.num_ensemble]
-        #losses = [max(self.renyiDiv(mix_dist.cpu(), pub_pred.cpu(), alpha=2*self.alpha),
-        #       self.renyiDiv(pub_pred.cpu(), mix_dist.cpu(), alpha=2*self.alpha)) for mix_dist in mixed_dists]
-        losses = [self.calc_priv_loss(mix_dist, pub_pred) for mix_dist in mixed_dists]
-        
-        for i, loss in enumerate(losses):
-            self.personalized_priv_loss[i].append(loss.cpu())
-            #self.left_over_priv_loss[i] += (self.target/2 - loss.cpu().item())
-        
+        ensemble_dist = torch.stack(mixed_dists).mean(dim=0) 
+        pub = output_dists[self.num_ensemble]
+        loss = self.calc_dependent_loss(mixed_dists, pub)
+        self.left_over += (self.eps/self.q_budget - loss)
+        #print("left over", self.left_over)
+        #print('loss', loss)
+        #print('lambda', self.lambda_history[-1])
+        self.priv_loss.append(loss) 
         return ensemble_dist 
 
-    def calc_priv_loss(self, p_pub, pred):
-        #ind = torch.nonzero(p_pub)
-        loss = torch.max(torch.max(p_pub/pred), torch.max(pred/p_pub))
-        return 2*(torch.log(loss)**2) 
+    def calc_dependent_loss(self, mixed_dists, p_pub):
+        max_loss = 0
+        p = torch.stack(mixed_dists).mean(dim=0)
+        for i in range(len(mixed_dists)):
+            p_i = torch.stack(mixed_dists[:i] + mixed_dists[i+1:]).mean(dim=0)
+            eps = max(self.renyiDiv(p, p_i, alpha=self.alpha),
+             self.renyiDiv(p_i, p, alpha=self.alpha))
+            max_loss = max(eps, max_loss)
+        return max_loss
+    
+    def data_independent_loss(self, p_mix, p_pub):
+        return  max(self.renyiDiv(p_mix, p_pub, alpha=self.alpha),
+                   self.renyiDiv(p_pub, p_mix, alpha=self.alpha)).item()
 
-    def lambda_solver_bisection(self, p_priv, p_pub, i):
+    def lambda_solver_bisection(self, p_priv, p_pub):
         def f(lambd):
             pred = lambd * p_priv + (1-lambd) * p_pub
-            #eps = self.calc_priv_loss(pred, p_pub)
-            eps = max(self.renyiDiv(pred, p_pub, alpha=2*self.alpha),
-                      self.renyiDiv(p_pub, pred, alpha=2*self.alpha))
-            return (eps - (self.target/2 + self.left_over_priv_loss[i]))
+            #eps = self.data_independent_loss(pred, p_pub)
+            eps = self.data_independent_loss(pred, p_pub)
+            return (eps - (self.eps/self.q_budget + self.left_over))
         if f(1) <= 0.0:
             lambd = 1 
         else:
-            lambd = bisect(f, 0, 1, maxiter=10, disp=False)
+            lambd = bisect(f, 0, 1, maxiter=20, disp=False)
         return lambd
 
     def lambda_solver(self, p_priv, p_pub):
-        lambdas = []
-        val_1 = ((np.exp(self.target/2) - 1) * p_pub) / (p_priv - p_pub)
-        val_2 = ((1 / np.exp(self.target/2) - 1) * p_pub)  / (p_priv - p_pub)
+        val_1 = ((np.exp((self.target + self.left_over)) - 1) * p_pub) / (p_priv - p_pub)
+        val_2 = ((1 / np.exp((self.target + self.left_over)) - 1) * p_pub) / (p_priv - p_pub)
         val = torch.max(val_1, val_2)
+        #val = torch.nan_to_num(val, nan=0.0, neginf=0.0)
         val = torch.min(val, torch.ones(val.size()[0]))
         return val
 
     def mix(self, p, p_prime, lambd=0.5):
         return (lambd * p + (1-lambd) * p_prime)
 
-    def reg_pred(self, output_dists):
-        output = output_dists[0]
-        for i in range(1, self.num_ensemble):
-            output += output_dists[i] 
-        return output / self.num_ensemble
-
     def print_priv_losses(self):
         print("-----------------------------")
-        print("Individual privacy loss")
-        for i, loss in enumerate(self.personalized_priv_loss):
-            print(f"Model {i}: {sum(loss):.3f}")
+        print(f"Total privacy loss {sum(self.priv_loss):.3f}")
         print("-----------------------------")
-        return
     
     def print_lambdas(self):
+        print("-----------------------------")
         print(f"Average lambda value: {np.mean(self.lambda_history):.3f}")
+        print("-----------------------------")
 
     def plot_individual_loss(self):
-        x = [i for i in range(len(self.personalized_priv_loss[0]))]
-        plt.plot(x, self.personalized_priv_loss[0])
+        x = [i for i in range(len(self.priv_loss))]
+        plt.plot(x, self.priv_loss)
         plt.savefig(os.path.join("plts", "priv_loss.png"))
         plt.clf()
 
