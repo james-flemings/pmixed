@@ -159,7 +159,7 @@ def plot_ppl(ppl_scores):
 
 def private_pred(priv_model, pub_model, epsilon, budget, alpha=2, device="cpu"):
     #lambd = lambda_solver_bisection(priv_model.cpu(), pub_model.cpu(), epsilon, budget, alpha)
-    lambd = 0.1
+    lambd = 0.2
     pred = lambd * priv_model + (1-lambd) * pub_model
     loss = min(data_independent_loss(pred, pub_model, alpha),
                data_dependent_loss(pred.cpu(), pub_model, alpha))
@@ -272,7 +272,7 @@ if __name__ == "__main__":
     dpsgd_ppl_list = []
     mix_ppl_list = []
     ensemble_ppl_list = []
-    for i in tqdm.tqdm(range(0, 5)):
+    for i in tqdm.tqdm(range(0, 1)):
         args.seed = i 
         pub_ppl, priv_ppl, dpsgd_ppl, mix_ppl, ensemble_ppl = main(args)
         pub_ppl_list.append(pub_ppl)

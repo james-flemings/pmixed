@@ -63,7 +63,7 @@ def train_ensemble(args, model_dir):
         lora_model = get_peft_model(pretrained_model, lora_config)
 
         print(f"\n\nTraining Shard {i} of size {len(lm_shards['train'])}")
-        print(f"Trainable paramters {print_trainable_parameters(lora_model)}\n\n")
+        print_trainable_parameters(lora_model)
 
         output_dir = 0
         if args.num_ensemble == 1:
