@@ -20,7 +20,8 @@ def main(args):
     set_seed(args.seed)
     #alpha = math.ceil(4 * np.log(1/args.delta) / (3*args.epsilon) + 1)
     alpha = args.alpha
-    epsilon = args.epsilon - np.log(1/args.delta)/(args.alpha-1)
+    #epsilon = args.epsilon - np.log(1/args.delta)/(args.alpha-1)
+    epsilon = args.epsilon - np.log((alpha-1)/alpha) + (np.log(args.delta) + np.log(alpha))/(alpha-1)
     print("Alpha", alpha)
     print("Epsilon", epsilon)
 
@@ -39,6 +40,7 @@ def main(args):
                              q_budget=args.query_budget,
                              alpha=alpha,
                              eps=epsilon,
+                             delta=args.delta,
                              target_mult=args.target_multiplier,
                              p_value=args.p_value)
 
@@ -47,8 +49,8 @@ def main(args):
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
-    #dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-6.0-dp-finetuned-{args.data_subset}.pt")).to(args.device)
-    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
+    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-6.0-dp-finetuned-{args.data_subset}.pt")).to(args.device)
+    #dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
 
     seq_length = 512
     dataset = load_dataset(args.dataset, args.data_subset)
@@ -272,7 +274,7 @@ if __name__ == "__main__":
     dpsgd_ppl_list = []
     mix_ppl_list = []
     ensemble_ppl_list = []
-    for i in tqdm.tqdm(range(0, 1)):
+    for i in tqdm.tqdm(range(0, 5)):
         args.seed = i 
         pub_ppl, priv_ppl, dpsgd_ppl, mix_ppl, ensemble_ppl = main(args)
         pub_ppl_list.append(pub_ppl)

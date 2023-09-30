@@ -14,7 +14,7 @@ import tqdm
 
 class Ensemble():
     def __init__(self, model_dirs, model_name, tokenizer,
-                device="cpu", q_budget=1024, alpha=2, eps=2, 
+                device="cpu", q_budget=1024, alpha=2, eps=2, delta=1e-5,
                 target_mult=1.0, p_value=1.0
     ):
         self.device = device
@@ -23,22 +23,19 @@ class Ensemble():
         self.alpha = alpha
         self.eps = eps
         self.p_value = p_value
+        self.delta = delta
         self.pub_model = AutoModelForCausalLM.from_pretrained(self.model_name,
                                                      pad_token_id=tokenizer.eos_token_id).to(
                                                      self.device)
         self.model_dirs = model_dirs
         self.num_ensemble = len(self.model_dirs)
         self.lambdas = np.array([1/4 for _ in range(self.num_ensemble)])
-        self.priv_loss = []
+        self.priv_loss = [] 
         self.left_over = 0
         self.target = np.sqrt((2 * self.eps) / (self.q_budget * self.alpha))
-        #self.target = (self.eps ) / (self.q_budget )
         self.lambda_history = []
-        self.beta = 0.4/self.alpha
-        self.sigma = np.sqrt( (4 * self.q_budget * (self.alpha-1) * alpha * np.exp(2 * self.beta)) /
-                              ((self.alpha-1) * self.eps - 4 * self.q_budget * (self.beta * self.alpha - 0.5 * np.log(1 - 2 * self.alpha * self.beta)))
-        )
-        print("Sigma value", self.sigma)
+        self.beta = 0.01
+        self.sigma = np.sqrt((self.q_budget * (3 * self.alpha + 2)) / self.eps)
         self.lora_ensemble = 0 
         for i, dir in enumerate(self.model_dirs):
             if i == 0:
@@ -91,10 +88,10 @@ class Ensemble():
         return logits
 
     def priv_pred(self, output_dists):
-        #self.lambdas = [self.lambda_solver_bisection(output_dists[i],
-        #                                            output_dists[self.num_ensemble],
-        #                                            ) for i in range(self.num_ensemble)]
-        self.lambdas = [0.1 for i in range(self.num_ensemble)]
+        self.lambdas = [self.lambda_solver_bisection(output_dists[i],
+                                                    output_dists[self.num_ensemble],
+                                                    ) for i in range(self.num_ensemble)]
+        #self.lambdas = [0.1 for i in range(self.num_ensemble)]
         self.lambda_history.append(np.mean([lambd for lambd in self.lambdas]))
         mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[i])
                        for i in range(self.num_ensemble)]
@@ -102,44 +99,84 @@ class Ensemble():
         mixed_dists = torch.stack(mixed_dists)
         ensemble_dist = mixed_dists.mean(dim=0) 
         pub = output_dists[self.num_ensemble]
-        loss = self.data_dependent_loss(mixed_dists)
-        ub_loss = self.data_dependent_loss_ub(mixed_dists, beta=0.01, sigma=57.6)
-        print("Data dependent loss", loss)
-        print("Upper bounded data dependent loss", ub_loss)
-        #self.left_over += (self.eps/self.q_budget - loss)
+        loss = self.data_dependent_loss(mixed_dists, alpha=self.alpha)
+        #ub_loss = self.data_dependent_loss_ub(mixed_dists, pub, beta=self.beta, sigma=self.sigma)
         self.priv_loss.append(loss) 
-        return ensemble_dist 
+        return ensemble_dist
 
-    def data_dependent_loss(self, mixed_dists):
-        max_loss = 0
+    def indiv_priv_loss(self, mixed_dists, i):
         p = mixed_dists.mean(dim=0)
-        X = combinations([i for i in range(len(mixed_dists))], len(mixed_dists)-1)
+        p_i = torch.cat((mixed_dists[:i, :], mixed_dists[i+1:, :])) 
+        return max(self.renyiDiv(p, p_i, alpha=self.alpha), self.renyiDiv(p_i, p, alpha=self.alpha))
+
+    def data_dependent_loss(self, mixed_dists, alpha, ret_idx=False):
+        max_loss = 0
+        idx = -1 
+        p = mixed_dists.mean(dim=0)
+        models = [i for i in range(len(mixed_dists))]
+        X = combinations(models, len(mixed_dists)-1)
         for x in X:
             p_i = mixed_dists[list(x)].mean(dim=0)
-            eps = max(self.renyiDiv(p, p_i, alpha=self.alpha),
-             self.renyiDiv(p_i, p, alpha=self.alpha))
-            max_loss = max(eps, max_loss)
-        return max_loss
+            eps = max(self.renyiDiv(p, p_i, alpha=alpha),
+             self.renyiDiv(p_i, p, alpha=alpha))
+            if max_loss < eps:
+                idx = set(models).difference(set(x))
+                max_loss = eps
+            
+        return (max_loss, idx.pop()) if ret_idx else max_loss
     
-    def data_dependent_loss_ub(self, mixed_dists, beta, sigma):
-        ss = self.smooth_sensitivity(mixed_dists, beta)
-        eps = self.data_dependent_loss(mixed_dists)
-        return eps + ss * np.random.normal(loc=0.0, scale=sigma, size=1)
+    def data_dependent_loss_ub(self, mixed_dists, pub, beta, sigma):
+        ss = self.smooth_sensitivity(mixed_dists, pub, beta)
+        eps = self.data_dependent_loss(mixed_dists, alpha=self.alpha)
+        b = beta * np.random.normal(loc=0.0, scale=0.5*sigma, size=1)
+        c = np.sqrt(2 * np.log(2/(self.delta/2))) 
+        mu = np.log(ss) + b + (c * 0.5*sigma * beta)
+        return (eps + ss * np.random.normal(loc=0.0, scale=sigma, size=1)
+                 + self.sigma * c * np.exp(mu))
 
-    def smooth_sensitivity(self, mixed_dists, beta, k=2):
+    def smooth_sensitivity(self, mixed_dists, p_pub, beta, k=2):
         X = [i for i in range(self.num_ensemble)] 
         ss = 0
-        for k in range(self.num_ensemble, 2, -1):
-            X_prime = combinations(X, k) 
-            ss_prime = max(np.exp(-beta * k) * np.array([self.local_sensitivity(mixed_dists[[list(x_prime)]]) for x_prime in X_prime]))
-            print(f"k={self.num_ensemble-k}, Smooth Sensitivity={ss_prime}")
-            ss = max(ss, ss_prime)
-        return ss
+        used_idx = [] 
+        eps = 0
+        for i in range(self.num_ensemble):
+            for j in range(i+1, self.num_ensemble):
+                p = torch.cat((mixed_dists[[i]], mixed_dists[[j]]))
+                eps_prime = self.data_dependent_loss(p, alpha=float('Inf'))
+                if  eps_prime > eps:
+                    used_idx = [i, j]
+                    eps = eps_prime 
+        ranked_dists = torch.cat((mixed_dists[[used_idx[0]]], mixed_dists[[used_idx[1]]]))
+
+        full_ids = {i for i in range(self.num_ensemble)}
+        for _ in range(self.num_ensemble-2):
+            ls = 0
+            id = 0
+            eps = self.data_dependent_loss(ranked_dists, alpha=float("Inf"))
+            for m in full_ids.difference(set(used_idx)):
+                eps_prime = self.data_dependent_loss(torch.cat((ranked_dists, mixed_dists[[m]])), alpha=float("Inf"))
+                ls_prime = abs(eps - eps_prime)
+                if ls_prime > ls:
+                    ls = ls_prime
+                    id = m
+            used_idx.append(id)
+            ranked_dists = torch.cat((ranked_dists, mixed_dists[[id]]))
+
+        #for k in range(self.num_ensemble, 2, -1):
+            #X_prime = combinations(X, k) 
+            #ss_prime = max(np.exp(-beta * k) * np.array([self.local_sensitivity(mixed_dists[list(x_prime)]) for x_prime in X_prime]))
+            #ss_prime_eff = np.exp(-beta * k) * self.local_sensitivity(ranked_dists[:k, :]) 
+            #ss_prime_eff = np.exp(-beta * k) * abs(self.data_dependent_loss(ranked_dists[:k, :]) - self.data_dependent_loss(ranked_dists[1:k, :]))
+            #print(f"k={self.num_ensemble-k}, Smooth Sensitivity={ss_prime}")
+            #print(f"calc Smooth Sensitivity={ss_prime_eff}")
+            #ss = max(ss, ss_prime_eff)
+        ss_prime_eff = np.exp(-beta * k) * self.local_sensitivity(ranked_dists[:3, :]) 
+        return ss_prime_eff
 
     def local_sensitivity(self, mixed_dists):
-        eps = self.data_dependent_loss(mixed_dists)
+        eps = self.data_dependent_loss(mixed_dists, alpha=self.alpha)
         X = combinations([i for i in range(len(mixed_dists))], len(mixed_dists)-1)
-        return max([abs(eps - self.data_dependent_loss(mixed_dists[list(x)])) for x in X])
+        return max([abs(eps - self.data_dependent_loss(mixed_dists[list(x)], alpha=self.alpha, ret_idx=False)) for x in X])
     
     def data_independent_loss(self, p_mix, p_pub):
         return  max(self.renyiDiv(p_mix, p_pub, alpha=self.alpha),
