@@ -20,7 +20,7 @@ class Ensemble():
         self.device = device
         self.model_name = model_name
         self.q_budget = q_budget
-        self.alpha = alpha
+        self.alpha = alpha 
         self.eps = eps
         self.p_value = p_value
         self.delta = delta
@@ -29,14 +29,16 @@ class Ensemble():
                                                      self.device)
         self.model_dirs = model_dirs
         self.num_ensemble = len(self.model_dirs)
-        self.lambdas = np.array([1/4 for _ in range(self.num_ensemble)])
-        self.priv_loss = [] 
-        self.left_over = 0
-        self.target = np.sqrt((2 * self.eps) / (self.q_budget * self.alpha))
+        self.lambdas = np.array([0 for _ in range(self.num_ensemble)])
         self.lambda_history = []
+        self.priv_loss = [] 
+        self.target = np.log(self.num_ensemble * np.exp((self.alpha-1) * self.eps / self.q_budget)
+                        + 1 - self.num_ensemble) / (4 * (self.alpha - 1))
+        print(f"Target value {self.target:2f}")
         self.beta = 0.01
         self.sigma = np.sqrt((self.q_budget * (3 * self.alpha + 2)) / self.eps)
         self.lora_ensemble = 0 
+        self.pairs = [(i, i+1) for i in range(0, self.num_ensemble, 2)]
         for i, dir in enumerate(self.model_dirs):
             if i == 0:
                 self.lora_ensemble = PeftModel.from_pretrained(copy.deepcopy(
@@ -92,37 +94,36 @@ class Ensemble():
                                                     output_dists[self.num_ensemble],
                                                     ) for i in range(self.num_ensemble)]
         #self.lambdas = [0.1 for i in range(self.num_ensemble)]
+        p_pub = output_dists[self.num_ensemble]
         self.lambda_history.append(np.mean([lambd for lambd in self.lambdas]))
         mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[i])
                        for i in range(self.num_ensemble)]
-
         mixed_dists = torch.stack(mixed_dists)
         ensemble_dist = mixed_dists.mean(dim=0) 
-        pub = output_dists[self.num_ensemble]
-        loss = self.data_dependent_loss(mixed_dists, alpha=self.alpha)
-        #ub_loss = self.data_dependent_loss_ub(mixed_dists, pub, beta=self.beta, sigma=self.sigma)
+        loss = self.data_dependent_loss(mixed_dists, p_pub, alpha=self.alpha)
+        '''
+        for i in range(self.num_ensemble):
+            p_i = torch.cat((mixed_dists[:i, :], mixed_dists[i+1:, :])).mean(dim=0)
+            eps = max(self.renyiDiv(p_i, mixed_dists[i], self.alpha),
+                      self.renyiDiv(mixed_dists[i], p_i, self.alpha))
+            if eps > self.eps/self.q_budget:
+                print(i, eps)
+            #print(i, self.data_independent_loss(mixed_dists[i], p_pub, self.alpha))
+        '''
+        if loss > self.eps/(self.q_budget):
+            print(loss)
         self.priv_loss.append(loss) 
         return ensemble_dist
 
-    def indiv_priv_loss(self, mixed_dists, i):
-        p = mixed_dists.mean(dim=0)
-        p_i = torch.cat((mixed_dists[:i, :], mixed_dists[i+1:, :])) 
-        return max(self.renyiDiv(p, p_i, alpha=self.alpha), self.renyiDiv(p_i, p, alpha=self.alpha))
-
-    def data_dependent_loss(self, mixed_dists, alpha, ret_idx=False):
+    def data_dependent_loss(self, mixed_dists, p_pub, alpha, ret_idx=False):
         max_loss = 0
         idx = -1 
         p = mixed_dists.mean(dim=0)
-        models = [i for i in range(len(mixed_dists))]
-        X = combinations(models, len(mixed_dists)-1)
-        for x in X:
-            p_i = mixed_dists[list(x)].mean(dim=0)
+        for i in range(mixed_dists.size()[0]):
+            p_i = torch.cat((mixed_dists[:i, :], mixed_dists[i+1:, :])).mean(dim=0)
             eps = max(self.renyiDiv(p, p_i, alpha=alpha),
              self.renyiDiv(p_i, p, alpha=alpha))
-            if max_loss < eps:
-                idx = set(models).difference(set(x))
-                max_loss = eps
-            
+            max_loss = max(max_loss, eps)
         return (max_loss, idx.pop()) if ret_idx else max_loss
     
     def data_dependent_loss_ub(self, mixed_dists, pub, beta, sigma):
@@ -162,14 +163,6 @@ class Ensemble():
             used_idx.append(id)
             ranked_dists = torch.cat((ranked_dists, mixed_dists[[id]]))
 
-        #for k in range(self.num_ensemble, 2, -1):
-            #X_prime = combinations(X, k) 
-            #ss_prime = max(np.exp(-beta * k) * np.array([self.local_sensitivity(mixed_dists[list(x_prime)]) for x_prime in X_prime]))
-            #ss_prime_eff = np.exp(-beta * k) * self.local_sensitivity(ranked_dists[:k, :]) 
-            #ss_prime_eff = np.exp(-beta * k) * abs(self.data_dependent_loss(ranked_dists[:k, :]) - self.data_dependent_loss(ranked_dists[1:k, :]))
-            #print(f"k={self.num_ensemble-k}, Smooth Sensitivity={ss_prime}")
-            #print(f"calc Smooth Sensitivity={ss_prime_eff}")
-            #ss = max(ss, ss_prime_eff)
         ss_prime_eff = np.exp(-beta * k) * self.local_sensitivity(ranked_dists[:3, :]) 
         return ss_prime_eff
 
@@ -178,15 +171,15 @@ class Ensemble():
         X = combinations([i for i in range(len(mixed_dists))], len(mixed_dists)-1)
         return max([abs(eps - self.data_dependent_loss(mixed_dists[list(x)], alpha=self.alpha, ret_idx=False)) for x in X])
     
-    def data_independent_loss(self, p_mix, p_pub):
-        return  max(self.renyiDiv(p_mix, p_pub, alpha=self.alpha),
-                   self.renyiDiv(p_pub, p_mix, alpha=self.alpha)).item()
+    def data_independent_loss(self, p_mix, p_pub, alpha):
+        return  max(self.renyiDiv(p_mix, p_pub, alpha=alpha),
+                   self.renyiDiv(p_pub, p_mix, alpha=alpha)).item()
 
-    def lambda_solver_bisection(self, p_priv, p_pub):
+    def lambda_solver_bisection(self, p, p_pub):
         def f(lambd):
-            pred = lambd * p_priv + (1-lambd) * p_pub
-            eps = self.data_independent_loss(pred, p_pub)
-            return (eps - (self.eps/self.q_budget + self.left_over))
+            pred = self.mix(p, p_pub, lambd)
+            eps = self.data_independent_loss(pred, p_pub, self.alpha)
+            return (eps - self.target)#self.eps/self.q_budget)
         if f(1) <= 0.0:
             lambd = 1 
         else:
@@ -194,10 +187,20 @@ class Ensemble():
         return lambd
 
     def lambda_solver(self, p_priv, p_pub):
-        val_1 = ((np.exp((self.target + self.left_over)) - 1) * p_pub) / (p_priv - p_pub)
-        val_2 = ((1 / np.exp((self.target + self.left_over)) - 1) * p_pub) / (p_priv - p_pub)
+        #val_1 = ((np.exp(self.target) - 1) * p_pub) / (p_priv - p_pub)
+        #val_2 = ((1 / np.exp(self.target) - 1) * p_pub) / (p_priv - p_pub)
+        #val = torch.max(val_1, val_2)
+        #val = torch.min(val, torch.ones(val.size()[0]))
+        val_1 = ((np.exp((self.alpha-1)*(self.eps/self.q_budget)) - 1) / (
+                torch.sum((p_pub**(self.alpha)) / (p_priv**(self.alpha-1))) - 1 
+                )
+        )
+        val_2 = ((np.exp((self.alpha-1)*(self.eps/self.q_budget)) - 1) / ( 
+                torch.sum((p_priv**(self.alpha)) / (p_pub**(self.alpha-1))) - 1 
+                )
+        )
+        print(val_1, val_2)
         val = torch.max(val_1, val_2)
-        val = torch.min(val, torch.ones(val.size()[0]))
         return val
 
     def mix(self, p, p_prime, lambd=0.5):

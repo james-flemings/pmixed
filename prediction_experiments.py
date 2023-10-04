@@ -17,7 +17,7 @@ import numpy as np
 import math
 
 def main(args):
-    set_seed(args.seed)
+    set_seed(0)
     #alpha = math.ceil(4 * np.log(1/args.delta) / (3*args.epsilon) + 1)
     alpha = args.alpha
     #epsilon = args.epsilon - np.log(1/args.delta)/(args.alpha-1)
@@ -78,8 +78,7 @@ def main(args):
     dp_fine_tuned_neg_log_likelihood = []
     priv_neg_log_likelihood= []
     ensemble_neg_log_likelihood= []
-
-    test_loader = DataLoader(test_data, shuffle=True)
+    test_loader = DataLoader(test_data.select([i + args.start for i in range(args.start+1)]))#, shuffle=True)
     priv_loss = []
     lambdas = []
     fine_tuned_model.eval()
@@ -267,6 +266,8 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--p_value", type=float, default=1.0)
     parser.add_argument("--e_value", type=float, default=0.01)
+    parser.add_argument("--iters", type=int, default=1)
+    parser.add_argument("--start", type=int, default=0)
     args = parser.parse_args()
 
     pub_ppl_list = []
@@ -274,8 +275,8 @@ if __name__ == "__main__":
     dpsgd_ppl_list = []
     mix_ppl_list = []
     ensemble_ppl_list = []
-    for i in tqdm.tqdm(range(0, 5)):
-        args.seed = i 
+    for i in tqdm.tqdm(range(0, args.iters)):
+        args.start = i 
         pub_ppl, priv_ppl, dpsgd_ppl, mix_ppl, ensemble_ppl = main(args)
         pub_ppl_list.append(pub_ppl)
         priv_ppl_list.append(priv_ppl)
