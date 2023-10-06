@@ -33,7 +33,9 @@ class Ensemble():
         self.lambda_history = []
         self.priv_loss = [] 
         self.target = np.log(self.num_ensemble * np.exp((self.alpha-1) * self.eps / self.q_budget)
-                        + 1 - self.num_ensemble) / (4 * (self.alpha - 1))
+                        + 1 - self.num_ensemble) / (4*(self.alpha - 1))
+        #self.target = np.log(self.num_ensemble * np.exp(self.eps / self.q_budget)
+        #                     + 1 - self.num_ensemble) / 2
         print(f"Target value {self.target:2f}")
         self.beta = 0.01
         self.sigma = np.sqrt((self.q_budget * (3 * self.alpha + 2)) / self.eps)
@@ -100,14 +102,12 @@ class Ensemble():
                        for i in range(self.num_ensemble)]
         mixed_dists = torch.stack(mixed_dists)
         ensemble_dist = mixed_dists.mean(dim=0) 
-        loss = self.data_dependent_loss(mixed_dists, p_pub, alpha=self.alpha)
+        loss = self.data_dependent_loss(mixed_dists, alpha=self.alpha)
         '''
         for i in range(self.num_ensemble):
             p_i = torch.cat((mixed_dists[:i, :], mixed_dists[i+1:, :])).mean(dim=0)
-            eps = max(self.renyiDiv(p_i, mixed_dists[i], self.alpha),
-                      self.renyiDiv(mixed_dists[i], p_i, self.alpha))
-            if eps > self.eps/self.q_budget:
-                print(i, eps)
+            eps = self.renyiDiv(2*ensemble_dist - p_i, ensemble_dist)
+            print(i, eps)
             #print(i, self.data_independent_loss(mixed_dists[i], p_pub, self.alpha))
         '''
         if loss > self.eps/(self.q_budget):
@@ -115,7 +115,7 @@ class Ensemble():
         self.priv_loss.append(loss) 
         return ensemble_dist
 
-    def data_dependent_loss(self, mixed_dists, p_pub, alpha, ret_idx=False):
+    def data_dependent_loss(self, mixed_dists, alpha, ret_idx=False):
         max_loss = 0
         idx = -1 
         p = mixed_dists.mean(dim=0)
@@ -187,20 +187,10 @@ class Ensemble():
         return lambd
 
     def lambda_solver(self, p_priv, p_pub):
-        #val_1 = ((np.exp(self.target) - 1) * p_pub) / (p_priv - p_pub)
-        #val_2 = ((1 / np.exp(self.target) - 1) * p_pub) / (p_priv - p_pub)
-        #val = torch.max(val_1, val_2)
-        #val = torch.min(val, torch.ones(val.size()[0]))
-        val_1 = ((np.exp((self.alpha-1)*(self.eps/self.q_budget)) - 1) / (
-                torch.sum((p_pub**(self.alpha)) / (p_priv**(self.alpha-1))) - 1 
-                )
-        )
-        val_2 = ((np.exp((self.alpha-1)*(self.eps/self.q_budget)) - 1) / ( 
-                torch.sum((p_priv**(self.alpha)) / (p_pub**(self.alpha-1))) - 1 
-                )
-        )
-        print(val_1, val_2)
+        val_1 = ((np.exp(self.target) - 1) * p_pub) / (p_priv - p_pub)
+        val_2 = ((1 / np.exp(self.target) - 1) * p_pub) / (p_priv - p_pub)
         val = torch.max(val_1, val_2)
+        val = torch.min(val, torch.ones(val.size()[0]))
         return val
 
     def mix(self, p, p_prime, lambd=0.5):
