@@ -5,6 +5,7 @@ from typing import List
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from math import comb
 import copy
 import matplotlib.pyplot as plt
 from scipy.optimize import bisect
@@ -15,14 +16,14 @@ import tqdm
 class Ensemble():
     def __init__(self, model_dirs, model_name, tokenizer,
                 device="cpu", q_budget=1024, alpha=2, eps=2, delta=1e-5,
-                target_mult=1.0, p_value=1.0
+                p=1.0
     ):
         self.device = device
         self.model_name = model_name
         self.q_budget = q_budget
         self.alpha = alpha 
         self.eps = eps
-        self.p_value = p_value
+        self.p = p
         self.delta = delta
         self.pub_model = AutoModelForCausalLM.from_pretrained(self.model_name,
                                                      pad_token_id=tokenizer.eos_token_id).to(
@@ -32,15 +33,18 @@ class Ensemble():
         self.lambdas = np.array([0 for _ in range(self.num_ensemble)])
         self.lambda_history = []
         self.priv_loss = [] 
-        self.target = np.log(self.num_ensemble * np.exp((self.alpha-1) * self.eps / self.q_budget)
+
+        if p < 1.0:
+            a = 1 
+            while self.subsample_eps(a * self.eps / self.q_budget, self.p, self.alpha) < self.eps / self.q_budget:
+                a += 1
+            print("a value", (a-1))
+            self.eps = self.eps * (a-1)
+
+        self.target = np.log(self.num_ensemble * np.exp((self.alpha-1) * alpha * self.eps / self.q_budget)
                         + 1 - self.num_ensemble) / (4*(self.alpha - 1))
-        #self.target = np.log(self.num_ensemble * np.exp(self.eps / self.q_budget)
-        #                     + 1 - self.num_ensemble) / 2
         print(f"Target value {self.target:2f}")
-        self.beta = 0.01
-        self.sigma = np.sqrt((self.q_budget * (3 * self.alpha + 2)) / self.eps)
         self.lora_ensemble = 0 
-        self.pairs = [(i, i+1) for i in range(0, self.num_ensemble, 2)]
         for i, dir in enumerate(self.model_dirs):
             if i == 0:
                 self.lora_ensemble = PeftModel.from_pretrained(copy.deepcopy(
@@ -50,6 +54,11 @@ class Ensemble():
                                                             ).to(self.device)
             else:
                 self.lora_ensemble.load_adapter(dir, adapter_name=f"lora-{i}")
+    
+    def subsample_eps(self, eps, p, alpha):
+        return 1/(alpha-1) * np.log((1-p)**(alpha-1) * (1+ (alpha-1) * p) 
+                                    + np.sum([comb(alpha, k) * (1-p)**(alpha-k) * p**k *
+                                              np.exp((k-1) * eps * k) for k in range(2, alpha+1)]))
 
     @staticmethod
     def renyiDiv(p, q, alpha=float('inf')):
@@ -90,28 +99,34 @@ class Ensemble():
         logits[indices_to_remove] = filter_value
 
         return logits
+    
+    def subsample(self, candidates, p):
+        sampled = []
+        for c in candidates:
+            if np.random.uniform() < p:
+                sampled.append(c)
+        #sampled = np.random.choice(self.num_ensemble, int(p*self.num_ensemble))
+        return sampled
 
     def priv_pred(self, output_dists):
+        sampled = self.subsample([i for i in range(self.num_ensemble)], self.p)
+        if len(sampled) == 0:
+            return output_dists[self.num_ensemble]
         self.lambdas = [self.lambda_solver_bisection(output_dists[i],
                                                     output_dists[self.num_ensemble],
-                                                    ) for i in range(self.num_ensemble)]
+                                                    )for i in sampled]
+                                                    #) for i in range(self.num_ensemble)]
         #self.lambdas = [0.1 for i in range(self.num_ensemble)]
-        p_pub = output_dists[self.num_ensemble]
         self.lambda_history.append(np.mean([lambd for lambd in self.lambdas]))
-        mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[i])
-                       for i in range(self.num_ensemble)]
+        mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[lamb_i])
+                       #for i in range(self.num_ensemble)]
+                       for lamb_i, i in enumerate(sampled)]
         mixed_dists = torch.stack(mixed_dists)
         ensemble_dist = mixed_dists.mean(dim=0) 
-        loss = self.data_dependent_loss(mixed_dists, alpha=self.alpha)
-        '''
-        for i in range(self.num_ensemble):
-            p_i = torch.cat((mixed_dists[:i, :], mixed_dists[i+1:, :])).mean(dim=0)
-            eps = self.renyiDiv(2*ensemble_dist - p_i, ensemble_dist)
-            print(i, eps)
-            #print(i, self.data_independent_loss(mixed_dists[i], p_pub, self.alpha))
-        '''
-        if loss > self.eps/(self.q_budget):
-            print(loss)
+        #loss = self.data_dependent_loss(mixed_dists, alpha=self.alpha)
+        loss = self.subsample_eps(self.eps/self.q_budget, self.p, self.alpha)
+        #if loss > self.eps/(self.q_budget):
+        #    print(loss)
         self.priv_loss.append(loss) 
         return ensemble_dist
 
@@ -179,7 +194,7 @@ class Ensemble():
         def f(lambd):
             pred = self.mix(p, p_pub, lambd)
             eps = self.data_independent_loss(pred, p_pub, self.alpha)
-            return (eps - self.target)#self.eps/self.q_budget)
+            return (eps - self.target)
         if f(1) <= 0.0:
             lambd = 1 
         else:

@@ -17,7 +17,6 @@ import numpy as np
 import math
 
 def main(args):
-    set_seed(0)
     #alpha = math.ceil(4 * np.log(1/args.delta) / (3*args.epsilon) + 1)
     alpha = args.alpha
     #epsilon = args.epsilon - np.log(1/args.delta)/(args.alpha-1)
@@ -33,6 +32,8 @@ def main(args):
 
     model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-wikitext-103-raw-v1")
                     for i in range(args.num_ensemble)]
+    #model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-{args.data_subset}")
+    #                for i in range(args.num_ensemble)]
     priv_ensemble = Ensemble(model_paths,
                              args.model_name,
                              tokenizer,
@@ -41,16 +42,15 @@ def main(args):
                              alpha=alpha,
                              eps=epsilon,
                              delta=args.delta,
-                             target_mult=args.target_multiplier,
-                             p_value=args.p_value)
+                             p=args.p)
 
     fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.data_subset}")#/checkpoint-3582")
     fine_tuned_model = PeftModel.from_pretrained(copy.deepcopy(pub_model),
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
-    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-6.0-dp-finetuned-{args.data_subset}.pt")).to(args.device)
-    #dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
+    #dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-6.0-dp-finetuned-{args.data_subset}.pt")).to(args.device)
+    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
 
     seq_length = 512
     dataset = load_dataset(args.dataset, args.data_subset)
@@ -251,6 +251,7 @@ def top_k_filtering(logits, top_k, filter_value=-float("Inf")):
 
 
 if __name__ == "__main__":
+    set_seed(0)
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_ensemble", type=int, default=8)
     parser.add_argument("--model_name", type=str, default="GPT2")
@@ -259,12 +260,11 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda:6")
     parser.add_argument("--seq_length", type=int, default=512)
     parser.add_argument("--query_budget", type=int, default=1024)
-    parser.add_argument("--target_multiplier", type=float, default=1.0)
     parser.add_argument("--epsilon", type=float, default=1.0)
-    parser.add_argument("--alpha", type=float, default=2)
+    parser.add_argument("--alpha", type=int, default=2)
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--p_value", type=float, default=1.0)
+    parser.add_argument("--p", type=float, default=1.0)
     parser.add_argument("--e_value", type=float, default=0.01)
     parser.add_argument("--iters", type=int, default=1)
     parser.add_argument("--start", type=int, default=0)
