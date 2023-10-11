@@ -30,10 +30,8 @@ def main(args):
                                                     args.device)
     model_dir = os.path.join("models", f"{args.num_ensemble}_ensemble")
 
-    model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-wikitext-103-raw-v1")
+    model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-{args.data_subset}")
                     for i in range(args.num_ensemble)]
-    #model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-{args.data_subset}")
-    #                for i in range(args.num_ensemble)]
     priv_ensemble = Ensemble(model_paths,
                              args.model_name,
                              tokenizer,
@@ -44,12 +42,11 @@ def main(args):
                              delta=args.delta,
                              p=args.p)
 
-    fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.data_subset}")#/checkpoint-3582")
+    fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.data_subset}")
     fine_tuned_model = PeftModel.from_pretrained(copy.deepcopy(pub_model),
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
-    #dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-6.0-dp-finetuned-{args.data_subset}.pt")).to(args.device)
     dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
 
     seq_length = 512

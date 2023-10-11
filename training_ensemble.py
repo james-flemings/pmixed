@@ -43,7 +43,6 @@ def init_training(args):
 
 def train_ensemble(args, model_dir):
     lm_dataset, tokenizer, pretrained_model = init_training(args)
-    print("Num epochs", args.epochs)
     for i in range(START, args.num_ensemble):
         lm_shards = {} 
         if args.num_ensemble == 1:
