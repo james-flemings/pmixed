@@ -110,24 +110,18 @@ class Ensemble():
 
     def priv_pred(self, output_dists):
         sampled = self.subsample([i for i in range(self.num_ensemble)], self.p)
+        loss = self.subsample_eps(self.eps/self.q_budget, self.p, self.alpha)
+        self.priv_loss.append(loss) 
         if len(sampled) == 0:
             return output_dists[self.num_ensemble]
         self.lambdas = [self.lambda_solver_bisection(output_dists[i],
                                                     output_dists[self.num_ensemble],
                                                     )for i in sampled]
-                                                    #) for i in range(self.num_ensemble)]
-        #self.lambdas = [0.1 for i in range(self.num_ensemble)]
         self.lambda_history.append(np.mean([lambd for lambd in self.lambdas]))
         mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[lamb_i])
-                       #for i in range(self.num_ensemble)]
                        for lamb_i, i in enumerate(sampled)]
         mixed_dists = torch.stack(mixed_dists)
         ensemble_dist = mixed_dists.mean(dim=0) 
-        #loss = self.data_dependent_loss(mixed_dists, alpha=self.alpha)
-        loss = self.subsample_eps(self.eps/self.q_budget, self.p, self.alpha)
-        #if loss > self.eps/(self.q_budget):
-        #    print(loss)
-        self.priv_loss.append(loss) 
         return ensemble_dist
 
     def data_dependent_loss(self, mixed_dists, alpha, ret_idx=False):
