@@ -38,12 +38,12 @@ class Ensemble():
             a = 1 
             while self.subsample_eps(a * self.eps / self.q_budget, self.p, self.alpha) < self.eps / self.q_budget:
                 a += 1
-            print("a value", (a-1))
+            #print("a value", (a-1))
             self.eps = self.eps * (a-1)
 
         self.target = np.log(self.num_ensemble * np.exp((self.alpha-1) * alpha * self.eps / self.q_budget)
                         + 1 - self.num_ensemble) / (4*(self.alpha - 1))
-        print(f"Target value {self.target:2f}")
+        #print(f"Target value {self.target:2f}")
         self.lora_ensemble = 0 
         for i, dir in enumerate(self.model_dirs):
             if i == 0:

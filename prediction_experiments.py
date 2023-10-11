@@ -1,3 +1,4 @@
+#!venv/bin/python
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,8 +21,8 @@ def main(args):
     #alpha = math.ceil(4 * np.log(1/args.delta) / (3*args.epsilon) + 1)
     alpha = args.alpha
     epsilon = args.epsilon - np.log((alpha-1)/alpha) + (np.log(args.delta) + np.log(alpha))/(alpha-1)
-    print("Alpha", alpha)
-    print("Epsilon", epsilon)
+    #print("Alpha", alpha)
+    #print("Epsilon", epsilon)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     pub_model = AutoModelForCausalLM.from_pretrained(args.model_name,
@@ -46,7 +47,8 @@ def main(args):
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
-    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
+    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{args.data_subset}.pt")).to(args.device)
+    #dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
 
     seq_length = 512
     dataset = load_dataset(args.dataset, args.data_subset)
@@ -106,15 +108,15 @@ def main(args):
     dp_fine_tuned_ppl = torch.exp(torch.stack(dp_fine_tuned_neg_log_likelihood))
     ensemble_ppl = torch.exp(torch.stack(ensemble_neg_log_likelihood))
 
-    print(f"Perplexity score for Pre-Trained Model: {pre_trained_ppl.mean():.2f}")
-    print(f"Perplexity score for Fine-Tuned Model: {fine_tuned_ppl.mean():.2f}")
-    print(f"Perplexity score for DP-Fine-Tuned Model: {dp_fine_tuned_ppl.mean():.2f}")
-    print(f"Perplexity score for Ensemble Private Prediction Model: {ensemble_ppl.mean():.2f}")
+    #print(f"Perplexity score for Pre-Trained Model: {pre_trained_ppl.mean():.2f}")
+    #print(f"Perplexity score for Fine-Tuned Model: {fine_tuned_ppl.mean():.2f}")
+    #print(f"Perplexity score for DP-Fine-Tuned Model: {dp_fine_tuned_ppl.mean():.2f}")
+    #print(f"Perplexity score for Ensemble Private Prediction Model: {ensemble_ppl.mean():.2f}")
 
-    priv_ensemble.print_priv_losses()
-    priv_ensemble.print_lambdas()
-    priv_ensemble.plot_individual_loss()
-    priv_ensemble.plot_lambdas()
+    #priv_ensemble.print_priv_losses()
+    #priv_ensemble.print_lambdas()
+    #priv_ensemble.plot_individual_loss()
+    #priv_ensemble.plot_lambdas()
 
     return pre_trained_ppl.mean().cpu(), fine_tuned_ppl.mean().cpu(), dp_fine_tuned_ppl.mean().cpu(), ensemble_ppl.mean().cpu()
 
@@ -139,7 +141,6 @@ if __name__ == "__main__":
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--p", type=float, default=1.0)
-    parser.add_argument("--e_value", type=float, default=0.01)
     parser.add_argument("--iters", type=int, default=1)
     parser.add_argument("--start", type=int, default=0)
     args = parser.parse_args()
@@ -148,7 +149,7 @@ if __name__ == "__main__":
     ft_ppl_list = []
     dpsgd_ppl_list = []
     ensemble_ppl_list = []
-    for i in tqdm.tqdm(range(0, args.iters)):
+    for i in range(0, args.iters):
         args.start = i 
         pub_ppl, ft_ppl, dpsgd_ppl, ensemble_ppl = main(args)
         pub_ppl_list.append(pub_ppl)
@@ -156,7 +157,7 @@ if __name__ == "__main__":
         dpsgd_ppl_list.append(dpsgd_ppl)
         ensemble_ppl_list.append(ensemble_ppl)
 
-    print(f"Final Perplexity score for Pre-Trained Model: {np.mean(pub_ppl_list):.2f}")
-    print(f"Final Perplexity score for Fine-Tuned Model: {np.mean(ft_ppl_list):.2f}")
-    print(f"Final Perplexity score for DP-Fine-Tuned Model: {np.mean(dpsgd_ppl_list):.2f}")
-    print(f"Final Perplexity score for Ensemble Model: {np.mean(ensemble_ppl_list):.2f}")
+    print(f"{np.mean(pub_ppl_list):.2f}")
+    print(f"{np.mean(ft_ppl_list):.2f}")
+    print(f"{np.mean(dpsgd_ppl_list):.2f}")
+    print(f"{np.mean(ensemble_ppl_list):.2f}")
