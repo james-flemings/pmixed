@@ -77,7 +77,7 @@ def main(args):
     ensemble_neg_log_likelihood= []
     test_loader = DataLoader(test_data.select([i + args.start for i in range(args.start+1)]))#, shuffle=True)
     fine_tuned_model.eval()
-
+    k = 0
     for i, data in enumerate(test_loader):
         labels = data['labels'].to(args.device)
         input_ids = data['input_ids'].to(args.device)
@@ -88,11 +88,12 @@ def main(args):
             output_dists = priv_ensemble.pred_dist(input_ids)
             ensemble_logits = []
 
-            if i < args.query_budget // seq_length:
+            if k < args.query_budget:
                 for j in range(seq_length):
                     token_softmax = [output_dist[j] for output_dist in output_dists]
                     ensemble_output_dist = priv_ensemble.priv_pred(token_softmax)
                     ensemble_logits.append(torch.log(ensemble_output_dist.cpu()))
+                    k += 1
 
                 ensemble_logits = torch.stack(ensemble_logits)
                 ensemble_neg_log_likelihood.append(calc_loss(ensemble_logits, labels.cpu()))

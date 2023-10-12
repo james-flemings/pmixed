@@ -49,7 +49,7 @@ with open(results_file, 'w') as f:
         command = create_command(epsilon, default_query_budget, default_alpha,
                                 default_num_ensembles, default_p, default_iters)
         result = subprocess.run(command, stdout=subprocess.PIPE)
-        ppl = result.stdout.decode('utf-8').split('\n')[-1]
+        ppl = result.stdout.decode('utf-8').split('\n')[-2]
         results = update_results(epsilon, default_query_budget, default_alpha,
                                 default_num_ensembles, default_p, ppl) 
         w.writerow(results)
@@ -60,7 +60,7 @@ with open(results_file, 'w') as f:
         command = create_command(default_epsilon, default_query_budget, default_alpha,
                                 ensemble, default_p, default_iters)
         result = subprocess.run(command, stdout=subprocess.PIPE)
-        ppl = result.stdout.decode('utf-8').split('\n')[-1]
+        ppl = result.stdout.decode('utf-8').split('\n')[-2]
         results = update_results(default_epsilon, default_query_budget, default_alpha,
                                 ensemble, default_p, ppl) 
         w.writerow(results)
@@ -69,7 +69,7 @@ with open(results_file, 'w') as f:
         command = create_command(default_epsilon, default_query_budget, alpha,
                                 default_num_ensembles, default_p, default_iters)
         result = subprocess.run(command, stdout=subprocess.PIPE)
-        ppl = result.stdout.decode('utf-8').split('\n')[-1]
+        ppl = result.stdout.decode('utf-8').split('\n')[-2]
         results = update_results(default_epsilon, default_query_budget, alpha,
                                 default_num_ensembles, default_p, ppl) 
         w.writerow(results)
@@ -78,7 +78,7 @@ with open(results_file, 'w') as f:
         command = create_command(default_epsilon, q_budget, default_alpha,
                                 default_num_ensembles, default_p, default_iters)
         result = subprocess.run(command, stdout=subprocess.PIPE)
-        ppl = result.stdout.decode('utf-8').split('\n')[-1]
+        ppl = result.stdout.decode('utf-8').split('\n')[-2]
         results = update_results(default_epsilon, q_budget, default_alpha,
                                 default_num_ensembles, default_p, ppl) 
         w.writerow(results)
@@ -87,7 +87,7 @@ with open(results_file, 'w') as f:
         command = create_command(default_epsilon, default_query_budget, default_alpha,
                                 default_num_ensembles, p, default_iters)
         result = subprocess.run(command, stdout=subprocess.PIPE)
-        ppl = result.stdout.decode('utf-8').split('\n')[-1]
+        ppl = result.stdout.decode('utf-8').split('\n')[-2]
         results = update_results(default_epsilon, default_query_budget, default_alpha,
                                 default_num_ensembles, p, ppl) 
         w.writerow(results)
