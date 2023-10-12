@@ -9,7 +9,7 @@ parameters = ["epsilon", 'num_ensemble', 'query_budget', 'alpha', 'p', 'ppl']
 
 epsilons = [2, 4, 6, 8, 10]
 num_ensembles = [8, 16, 32, 64]
-query_budgets = [256, 512, 1024, 2048]
+query_budgets = [512, 1024, 2048]
 alphas = [3, 4, 5, 6, 7]
 p_s = [1/16, 1/8, 1/4, 1/2]
 
