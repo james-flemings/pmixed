@@ -75,7 +75,8 @@ def main(args):
     fine_tuned_neg_log_likelihood = []
     dp_fine_tuned_neg_log_likelihood = []
     ensemble_neg_log_likelihood= []
-    test_loader = DataLoader(test_data.select([i + args.start for i in range(args.start+1)]))#, shuffle=True)
+    step_size = args.query_budget // args.seq_length
+    test_loader = DataLoader(test_data.select([i + args.start for i in range(args.start+step_size)]))#, shuffle=True)
     fine_tuned_model.eval()
     k = 0
     for i, data in enumerate(test_loader):
@@ -115,9 +116,9 @@ def main(args):
     #print(f"Perplexity score for Ensemble Private Prediction Model: {ensemble_ppl.mean():.2f}")
 
     #priv_ensemble.print_priv_losses()
-    #priv_ensemble.print_lambdas()
+    priv_ensemble.print_lambdas()
     #priv_ensemble.plot_individual_loss()
-    #priv_ensemble.plot_lambdas()
+    priv_ensemble.plot_lambdas()
 
     return pre_trained_ppl.mean().cpu(), fine_tuned_ppl.mean().cpu(), dp_fine_tuned_ppl.mean().cpu(), ensemble_ppl.mean().cpu()
 
@@ -150,8 +151,9 @@ if __name__ == "__main__":
     ft_ppl_list = []
     dpsgd_ppl_list = []
     ensemble_ppl_list = []
+    step_size = args.query_budget // args.seq_length
     for i in range(0, args.iters):
-        args.start = i 
+        args.start = i * step_size 
         pub_ppl, ft_ppl, dpsgd_ppl, ensemble_ppl = main(args)
         pub_ppl_list.append(pub_ppl)
         ft_ppl_list.append(ft_ppl)

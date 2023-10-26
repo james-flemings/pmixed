@@ -102,10 +102,10 @@ class Ensemble():
     
     def subsample(self, candidates, p):
         sampled = []
-        for c in candidates:
-            if np.random.uniform() < p:
-                sampled.append(c)
-        #sampled = np.random.choice(self.num_ensemble, int(p*self.num_ensemble))
+        #for c in candidates:
+        #    if np.random.uniform() < p:
+        #        sampled.append(c)
+        sampled = np.random.choice(self.num_ensemble, int(p*self.num_ensemble))
         return sampled
 
     def priv_pred(self, output_dists):
@@ -113,6 +113,7 @@ class Ensemble():
         loss = self.subsample_eps(self.eps/self.q_budget, self.p, self.alpha)
         self.priv_loss.append(loss) 
         if len(sampled) == 0:
+            self.lambda_history.append(0)
             return output_dists[self.num_ensemble]
         self.lambdas = [self.lambda_solver_bisection(output_dists[i],
                                                     output_dists[self.num_ensemble],
@@ -192,7 +193,7 @@ class Ensemble():
         if f(1) <= 0.0:
             lambd = 1 
         else:
-            lambd = bisect(f, 0, 1, maxiter=20, disp=False)
+            lambd = bisect(f, 0, 1, maxiter=50, disp=False)
         return lambd
 
     def lambda_solver(self, p_priv, p_pub):

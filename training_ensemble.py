@@ -80,8 +80,10 @@ def train_ensemble(args, model_dir):
             weight_decay=args.weight_decay,
             load_best_model_at_end=True,
             per_device_train_batch_size=args.batch_size,
+            lr_scheduler_type="linear",
+            warmup_steps=500,
         )
-        train_args = train_args.set_lr_scheduler(name="linear", warmup_steps=500)
+        #train_args = train_args.set_lr_scheduler(name="linear", warmup_steps=500)
         trainer = Trainer(
             model=lora_model,
             args=train_args,
@@ -244,7 +246,7 @@ if __name__ == "__main__":
     parser.add_argument("--training_type", type=str, default="sub-samp-and-agg")
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--noise_multiplier", type=float, default=1.)
-    parser.add_argument("--max_grad_norm", type=float, default=0.1)
+    parser.add_argument("--max_grad_norm", type=float, default=1.)
     parser.add_argument("--epsilon", type=float, default=1.)
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--num_gpus", type=int, default=1)

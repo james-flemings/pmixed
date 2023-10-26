@@ -14,7 +14,7 @@ alphas = [3, 4, 5, 6, 7]
 p_s = [1/16, 1/8, 1/4, 1/2]
 
 default_epsilon = 8
-default_query_budget = 512
+default_query_budget = 1024 
 default_num_ensembles=16
 default_p = 1/8
 default_iters=5

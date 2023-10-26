@@ -11,5 +11,5 @@ torchrun --nproc_per_node=num_gpus training_ensemble.py
 To reproduce dpsgd results, 
 
 ```bash
-torchrun --nproc_per_node=num_gpus training_ensemble.py --training_type="dpsgd" --num_gpus=num_gpus 
+python training_ensemble.py --training_type="dpsgd" --num_gpus=num_gpus 
 ```
