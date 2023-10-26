@@ -134,7 +134,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_ensemble", type=int, default=8)
     parser.add_argument("--model_name", type=str, default="GPT2")
     parser.add_argument("--dataset", type=str, default="wikitext")
-    parser.add_argument("--data_subset", type=str, default="wikitext-103-v1")
+    parser.add_argument("--data_subset", type=str, default="wikitext-103-raw-v1")
     parser.add_argument("--device", type=str, default="cuda:6")
     parser.add_argument("--seq_length", type=int, default=512)
     parser.add_argument("--query_budget", type=int, default=1024)

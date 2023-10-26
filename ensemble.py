@@ -118,6 +118,7 @@ class Ensemble():
         self.lambdas = [self.lambda_solver_bisection(output_dists[i],
                                                     output_dists[self.num_ensemble],
                                                     )for i in sampled]
+
         self.lambda_history.append(np.mean([lambd for lambd in self.lambdas]))
         mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[lamb_i])
                        for lamb_i, i in enumerate(sampled)]
@@ -193,7 +194,7 @@ class Ensemble():
         if f(1) <= 0.0:
             lambd = 1 
         else:
-            lambd = bisect(f, 0, 1, maxiter=50, disp=False)
+            lambd = bisect(f, 0, 1, maxiter=5000, disp=False)
         return lambd
 
     def lambda_solver(self, p_priv, p_pub):
@@ -214,6 +215,10 @@ class Ensemble():
     def print_lambdas(self):
         print("-----------------------------")
         print(f"Average lambda value: {np.mean(self.lambda_history):.3f}")
+        print("-----------------------------")
+        print(f"Min lambda value: {np.min(self.lambda_history):.3f}")
+        print("-----------------------------")
+        print(f"Max lambda value: {np.max(self.lambda_history):.3f}")
         print("-----------------------------")
 
     def plot_individual_loss(self):
