@@ -8,7 +8,7 @@ import numpy as np
 from math import comb
 import copy
 import matplotlib.pyplot as plt
-from scipy.optimize import bisect
+from scipy.optimize import bisect, brentq
 import os
 from itertools import combinations
 import tqdm
@@ -112,16 +112,18 @@ class Ensemble():
         sampled = self.subsample([i for i in range(self.num_ensemble)], self.p)
         loss = self.subsample_eps(self.eps/self.q_budget, self.p, self.alpha)
         self.priv_loss.append(loss) 
-        if len(sampled) == 0:
-            self.lambda_history.append(0)
-            return output_dists[self.num_ensemble]
-        self.lambdas = [self.lambda_solver_bisection(output_dists[i],
+        #if len(sampled) == 0:
+        #    self.lambda_history.append(0)
+        #    return output_dists[self.num_ensemble]
+
+        self.lambdas = np.array([self.lambda_solver_bisection(output_dists[i],
                                                     output_dists[self.num_ensemble],
-                                                    )for i in sampled]
+                                                    )for i in sampled])
 
         self.lambda_history.append(np.mean([lambd for lambd in self.lambdas]))
         mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[lamb_i])
                        for lamb_i, i in enumerate(sampled)]
+
         mixed_dists = torch.stack(mixed_dists)
         ensemble_dist = mixed_dists.mean(dim=0) 
         return ensemble_dist
@@ -194,8 +196,18 @@ class Ensemble():
         if f(1) <= 0.0:
             lambd = 1 
         else:
-            lambd = bisect(f, 0, 1, maxiter=5000, disp=False)
+            lambd = bisect(f, 0, 1, maxiter=100, disp=False)
         return lambd
+    
+    def lambda_solver_iter(self, p, p_pub, lambd):
+        while lambd > 0:
+            pred = self.mix(p, p_pub, lambd)
+            eps = self.data_independent_loss(pred, p_pub, self.alpha)
+            if eps < self.target:
+                return lambd
+            lambd -= 0.01
+        return lambd
+
 
     def lambda_solver(self, p_priv, p_pub):
         val_1 = ((np.exp(self.target) - 1) * p_pub) / (p_priv - p_pub)
@@ -216,7 +228,7 @@ class Ensemble():
         print("-----------------------------")
         print(f"Average lambda value: {np.mean(self.lambda_history):.3f}")
         print("-----------------------------")
-        print(f"Min lambda value: {np.min(self.lambda_history):.3f}")
+        print(f"Min lambda value: {np.min(self.lambda_history)}")
         print("-----------------------------")
         print(f"Max lambda value: {np.max(self.lambda_history):.3f}")
         print("-----------------------------")
@@ -229,6 +241,7 @@ class Ensemble():
 
     def plot_lambdas(self):
         x = [i for i in range(len(self.lambda_history))]
+        plt.figure().set_figwidth(15)
         plt.plot(x, self.lambda_history)
         plt.savefig(os.path.join("plts", "lambda_vals.png"))
         plt.clf()

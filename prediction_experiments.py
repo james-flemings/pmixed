@@ -47,7 +47,7 @@ def main(args):
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
-    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{args.data_subset}.pt")).to(args.device)
+    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-9-epochs-8.0-dp-finetuned-{args.data_subset}.pt")).to(args.device)
     #dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
 
     seq_length = 512
@@ -116,9 +116,9 @@ def main(args):
     #print(f"Perplexity score for Ensemble Private Prediction Model: {ensemble_ppl.mean():.2f}")
 
     #priv_ensemble.print_priv_losses()
-    priv_ensemble.print_lambdas()
+    #priv_ensemble.print_lambdas()
     #priv_ensemble.plot_individual_loss()
-    priv_ensemble.plot_lambdas()
+    #priv_ensemble.plot_lambdas()
 
     return pre_trained_ppl.mean().cpu(), fine_tuned_ppl.mean().cpu(), dp_fine_tuned_ppl.mean().cpu(), ensemble_ppl.mean().cpu()
 
