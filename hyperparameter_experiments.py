@@ -9,15 +9,15 @@ parameters = ["epsilon", 'num_ensemble', 'query_budget', 'alpha', 'p', 'ppl']
 
 epsilons = [2, 4, 6, 8, 10]
 num_ensembles = [8, 16, 32, 64]
-query_budgets = [512, 1024, 2048]
+query_budgets = [512, 1024, 2048, 4096]
 alphas = [3, 4, 5, 6, 7]
 p_s = [1/16, 1/8, 1/4, 1/2]
 
 default_epsilon = 8
 default_query_budget = 1024 
-default_num_ensembles=16
-default_p = 1/8
-default_iters=5
+default_num_ensembles = 16
+default_p = 1/16
+default_iters = 10
 delta = 1e-5
 
 #results = []
@@ -57,6 +57,7 @@ with open(results_file, 'w') as f:
     default_alpha = 3
 
     for ensemble in tqdm.tqdm(num_ensembles, desc="Ensemble"):
+        p_s = 1/8 if ensemble == 8 else 1/16
         command = create_command(default_epsilon, default_query_budget, default_alpha,
                                 ensemble, default_p, default_iters)
         result = subprocess.run(command, stdout=subprocess.PIPE)

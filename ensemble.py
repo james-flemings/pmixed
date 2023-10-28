@@ -38,12 +38,12 @@ class Ensemble():
             a = 1 
             while self.subsample_eps(a * self.eps / self.q_budget, self.p, self.alpha) < self.eps / self.q_budget:
                 a += 1
-            print("a value", (a-1))
+            #print("a value", (a-1))
             self.eps = self.eps * (a-1)
 
         self.target = np.log(self.num_ensemble * np.exp((self.alpha-1) * alpha * self.eps / self.q_budget)
                         + 1 - self.num_ensemble) / (4*(self.alpha - 1))
-        print(f"Target value {self.target:2f}")
+        #print(f"Target value {self.target:2f}")
         self.lora_ensemble = 0 
         for i, dir in enumerate(self.model_dirs):
             if i == 0:
@@ -78,9 +78,9 @@ class Ensemble():
         for i in range(self.num_ensemble):
             self.lora_ensemble.set_adapter(f"lora-{i}")
             logits = self.lora_ensemble(context).logits.squeeze().cpu()
-            output_dists.append(F.softmax(logits))
+            output_dists.append(F.softmax(logits, dim=1))
         logits = self.pub_model(context).logits.squeeze().cpu()
-        output_dists.append(F.softmax(logits))
+        output_dists.append(F.softmax(logits, dim=1))
         return output_dists 
 
     def top_p_filtering(self, logits, p, filter_value=-float("Inf")):
