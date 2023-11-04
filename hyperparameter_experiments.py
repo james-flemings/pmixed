@@ -40,55 +40,39 @@ def update_results(epsilon, q_budget, alpha, num_ensemble, p, ppl):
     'ppl': ppl
     }
 
+def get_results(epsilon, query_budget, alpha, num_ensembles, p, iters):
+    command = create_command(epsilon, query_budget, alpha,
+                                num_ensembles, p, iters)
+    output = subprocess.run(command, stdout=subprocess.PIPE)
+    ppl = output.stdout.decode('utf-8').split('\n')[-2].split(" ")[-1]
+    results = update_results(epsilon, query_budget, alpha,
+                            num_ensembles, p, ppl) 
+    return results
+
 with open(results_file, 'w') as f:
     w = csv.DictWriter(f, fieldnames=parameters)
     w.writeheader()
 
     for epsilon in tqdm.tqdm(epsilons, desc="Epsilon"):
         default_alpha = math.ceil(4 * np.log(1 / delta) / (3 * epsilon) + 1)
-        command = create_command(epsilon, default_query_budget, default_alpha,
-                                default_num_ensembles, default_p, default_iters)
-        result = subprocess.run(command, stdout=subprocess.PIPE)
-        ppl = result.stdout.decode('utf-8').split('\n')[-2]
-        results = update_results(epsilon, default_query_budget, default_alpha,
-                                default_num_ensembles, default_p, ppl) 
+        results = get_results(epsilon, default_query_budget, default_alpha, default_num_ensembles, default_p, default_iters)
         w.writerow(results)
 
     default_alpha = 3
 
     for ensemble in tqdm.tqdm(num_ensembles, desc="Ensemble"):
-        p_s = 1/8 if ensemble == 8 else 1/16
-        command = create_command(default_epsilon, default_query_budget, default_alpha,
-                                ensemble, default_p, default_iters)
-        result = subprocess.run(command, stdout=subprocess.PIPE)
-        ppl = result.stdout.decode('utf-8').split('\n')[-2]
-        results = update_results(default_epsilon, default_query_budget, default_alpha,
-                                ensemble, default_p, ppl) 
+        default_p = 1/8 if ensemble == 8 else 1/16
+        results = get_results(default_epsilon, default_query_budget, default_alpha, ensemble, default_p, default_iters)
         w.writerow(results)
 
     for alpha in tqdm.tqdm(alphas, desc="alpha"):
-        command = create_command(default_epsilon, default_query_budget, alpha,
-                                default_num_ensembles, default_p, default_iters)
-        result = subprocess.run(command, stdout=subprocess.PIPE)
-        ppl = result.stdout.decode('utf-8').split('\n')[-2]
-        results = update_results(default_epsilon, default_query_budget, alpha,
-                                default_num_ensembles, default_p, ppl) 
+        results = get_results(default_epsilon, default_query_budget, alpha, default_num_ensembles, default_p, default_iters)
         w.writerow(results)
 
     for q_budget in tqdm.tqdm(query_budgets, desc="Query Budget"):
-        command = create_command(default_epsilon, q_budget, default_alpha,
-                                default_num_ensembles, default_p, default_iters)
-        result = subprocess.run(command, stdout=subprocess.PIPE)
-        ppl = result.stdout.decode('utf-8').split('\n')[-2]
-        results = update_results(default_epsilon, q_budget, default_alpha,
-                                default_num_ensembles, default_p, ppl) 
+        results = get_results(default_epsilon, q_budget, default_alpha, default_num_ensembles, default_p, default_iters)
         w.writerow(results)
 
     for p in tqdm.tqdm(p_s, desc="Sample probability"):
-        command = create_command(default_epsilon, default_query_budget, default_alpha,
-                                default_num_ensembles, p, default_iters)
-        result = subprocess.run(command, stdout=subprocess.PIPE)
-        ppl = result.stdout.decode('utf-8').split('\n')[-2]
-        results = update_results(default_epsilon, default_query_budget, default_alpha,
-                                default_num_ensembles, p, ppl) 
+        results = get_results(default_epsilon, default_query_budget, default_alpha, default_num_ensembles, p, default_iters)
         w.writerow(results)
