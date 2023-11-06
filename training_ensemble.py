@@ -24,20 +24,22 @@ def init_training(args):
     tokenizer = GPT2Tokenizer.from_pretrained(args.model_name)
     pretrained_model = GPT2LMHeadModel.from_pretrained(args.model_name,
                         pad_token_id=tokenizer.eos_token_id)
+    if args.subset == "None":
+        args.subset = None
     dataset = load_dataset(args.dataset, args.subset)
-    tokenize_function = wiki_tokenize_function if args.dataset == "wikitext" else None
-    remove_columns = ["text"] if args.dataset == "wikitext" else None
+    #remove_columns = ["text"] if args.dataset == "wikitext" else None
+    remove_columns = ['text']
     tokenized_dataset = dataset.map(tokenize_function,
                                     fn_kwargs={"tokenizer": tokenizer},
                                     batched=True,
-                                    num_proc=4,
+                                    num_proc=args.num_proc,
                                     remove_columns=remove_columns
                                     )
     lm_dataset = tokenized_dataset.map(
         group_texts,
         fn_kwargs={"block_size": args.block_size},
         batched=True,
-        num_proc=4
+        num_proc=args.num_proc
     ) 
     return lm_dataset, tokenizer, pretrained_model
 
@@ -47,10 +49,16 @@ def train_ensemble(args, model_dir):
         lm_shards = {} 
         if args.num_ensemble == 1:
             lm_shards['train'] = lm_dataset['train']
-            lm_shards['validation'] = lm_dataset['validation']
+            if args.dataset == 'wikitext':
+                lm_shards['validation'] = lm_dataset['validation']
+            else:
+                lm_shards['validation'] = None
         else:
             lm_shards['train'] = lm_dataset['train'].shard(num_shards=args.num_ensemble, index=i)
-            lm_shards['validation'] = lm_dataset['validation'].shard(num_shards=args.num_ensemble, index=i)
+            if args.dataset == 'wikitext':
+                lm_shards['validation'] = lm_dataset['validation'].shard(num_shards=args.num_ensemble, index=i)
+            else:
+                lm_shards['validation'] = None
 
         lora_config = LoraConfig(
             r=args.lora_r,
@@ -61,8 +69,8 @@ def train_ensemble(args, model_dir):
         )
         lora_model = get_peft_model(pretrained_model, lora_config)
 
-        print(f"\n\nTraining Shard {i} of size {len(lm_shards['train'])}")
-        print_trainable_parameters(lora_model)
+        #print(f"\n\nTraining Shard {i} of size {len(lm_shards['train'])}")
+        #print_trainable_parameters(lora_model)
 
         output_dir = 0
         if args.num_ensemble == 1:
@@ -95,7 +103,7 @@ def train_ensemble(args, model_dir):
         print(f"\n\nPerplexity: {math.exp(eval_results['eval_loss']):.2f}\n\n")
         trainer.save_model(output_dir)
 
-def wiki_tokenize_function(examples, tokenizer):
+def tokenize_function(examples, tokenizer):
     return tokenizer(examples["text"])
 
 
@@ -250,6 +258,7 @@ if __name__ == "__main__":
     parser.add_argument("--epsilon", type=float, default=1.)
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--num_gpus", type=int, default=1)
+    parser.add_argument("--num_proc", type=int, default=64)
     args = parser.parse_args()
     world_size = args.num_gpus
 

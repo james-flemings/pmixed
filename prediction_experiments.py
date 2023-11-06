@@ -8,7 +8,7 @@ import os
 import argparse
 from ensemble import Ensemble
 from datasets import load_dataset
-from training_ensemble import group_texts, wiki_tokenize_function
+from training_ensemble import group_texts, tokenize_function
 from peft import PeftModel
 import copy
 import tqdm
@@ -53,8 +53,7 @@ def main(args):
     seq_length = 512
     dataset = load_dataset(args.dataset, args.data_subset)
 
-    tokenize_function = wiki_tokenize_function if args.dataset == "wikitext" else None
-    remove_columns = ["text"] if args.dataset == "wikitext" else None
+    remove_columns = ["text"] 
     tokenized_dataset = dataset.map(tokenize_function,
                                     fn_kwargs={"tokenizer": tokenizer},
                                     batched=True,

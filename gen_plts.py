@@ -7,13 +7,13 @@ file_name = "results.csv"
 df = pd.read_csv(file_name)
 
 eps_s, eps_e = 0, 5 
-ens_s, ens_e = 5, 9 
-alp_s, alp_e = 9, 14 
-qb_s, qb_e = 14, 18 
+qb_s, qb_e = 5, 9 
+ens_s, ens_e = 9, 13 
+alp_s, alp_e = 13, 18 
 p_s, p_e = 18, 22
 
-pre_trained = 40.39
-fine_tuned = 25.96
+pre_trained = 40.86
+fine_tuned = 27.25
 yticks = [25, 30, 35, 40]
 
 plt.plot(df.iloc[eps_s:eps_e]['epsilon'], df.iloc[eps_s:eps_e]['ppl'], linewidth=2,
@@ -86,7 +86,7 @@ plt.legend()
 plt.savefig('plts/probability.png')
 plt.clf()
 
-data = {"Pre-trained": pre_trained, "Fine-Tuned": fine_tuned, "DP-SGD": 34.33, "PMixED": 33.30}
+data = {"Pre-trained": pre_trained, "Fine-Tuned": fine_tuned, "DP-SGD": 35.36, "PMixED": 34.13}
 
 bars = plt.bar(data.keys(), data.values(), width=0.4)
 bars[0].set_color('green')
