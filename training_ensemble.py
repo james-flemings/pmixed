@@ -78,11 +78,11 @@ def train_ensemble(args, model_dir):
         else:
             output_dir = os.path.join(model_dir,
                                     f"lora-{args.model_name}-{i}-finetuned-{args.subset}")
-
+        eval_strat = 'no' if args.dataset == 'lm1b' else 'epoch'
         train_args = TrainingArguments(
             output_dir=output_dir,
-            evaluation_strategy="epoch",
-            save_strategy="epoch",
+            evaluation_strategy=eval_strat,
+            save_strategy=eval_strat,
             num_train_epochs=args.epochs,
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
@@ -99,8 +99,8 @@ def train_ensemble(args, model_dir):
             eval_dataset=lm_shards['validation'],
         )
         trainer.train()
-        eval_results = trainer.evaluate()
-        print(f"\n\nPerplexity: {math.exp(eval_results['eval_loss']):.2f}\n\n")
+        #eval_results = trainer.evaluate()
+        #print(f"\n\nPerplexity: {math.exp(eval_results['eval_loss']):.2f}\n\n")
         trainer.save_model(output_dir)
 
 def tokenize_function(examples, tokenizer):
