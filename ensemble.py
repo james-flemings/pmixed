@@ -36,13 +36,13 @@ class Ensemble():
 
         if p < 1.0:
             a = 1 
-            while self.subsample_eps(a * self.eps / self.q_budget, self.p, self.alpha) < self.eps / self.q_budget:
+            while self.subsample_eps(a * self.eps / self.q_budget, self.p, self.alpha) < (self.eps / self.q_budget):
                 a += 1
             #print("a value", (a-1))
             self.eps = self.eps * (a-1)
 
-        self.target = np.log(self.num_ensemble * np.exp((self.alpha-1) * alpha * self.eps / self.q_budget)
-                        + 1 - self.num_ensemble) / (4*(self.alpha - 1))
+        self.target = np.log((self.p * self.num_ensemble) * np.exp((self.alpha-1) * self.eps / self.q_budget)
+                        + 1 - (self.p * self.num_ensemble)) / (4*(self.alpha - 1))
         #print(f"Target value {self.target:2f}")
         self.lora_ensemble = 0 
         for i, dir in enumerate(self.model_dirs):
@@ -56,9 +56,9 @@ class Ensemble():
                 self.lora_ensemble.load_adapter(dir, adapter_name=f"lora-{i}")
     
     def subsample_eps(self, eps, p, alpha):
-        return 1/(alpha-1) * np.log((1-p)**(alpha-1) * (1+ (alpha-1) * p) 
+        return 1/(alpha-1) * np.log((1-p)**(alpha-1) * (1 + (alpha-1) * p) 
                                     + np.sum([comb(alpha, k) * (1-p)**(alpha-k) * p**k *
-                                              np.exp((k-1) * eps * k) for k in range(2, alpha+1)]))
+                                              np.exp((k-1) * eps) for k in range(2, alpha+1)]))
 
     @staticmethod
     def renyiDiv(p, q, alpha=float('inf')):

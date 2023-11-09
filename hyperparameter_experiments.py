@@ -12,13 +12,13 @@ num_ensembles = [8, 16, 32, 64]
 query_budgets = [512, 1024, 2048, 4096]
 iters = [2**4, 2**3, 2**2, 2**1]
 alphas = [3, 4, 5, 6, 7]
-p_s = [1/16, 1/8, 1/4, 1/2]
+p_s = [1/32, 1/16, 1/8, 1/4]
 
 default_epsilon = 8
 default_query_budget = 1024 
-default_num_ensembles = 16
-default_p = 1/16
-default_iters = 2**3 
+default_num_ensembles = 32 
+default_p = 1/32
+default_iters = 2**3
 default_alpha = 3
 delta = 1e-5
 
@@ -67,9 +67,11 @@ with open(results_file, 'w') as f:
     default_alpha = 3
 
     for ensemble in tqdm.tqdm(num_ensembles, desc="Ensemble"):
-        default_p = 1/8 if ensemble == 8 else 1/16
+        default_p = 1/ensemble
         results = get_results(default_epsilon, default_query_budget, default_alpha, ensemble, default_p, default_iters)
         w.writerow(results)
+
+    default_p = 1/32
 
     for alpha in tqdm.tqdm(alphas, desc="alpha"):
         results = get_results(default_epsilon, default_query_budget, alpha, default_num_ensembles, default_p, default_iters)

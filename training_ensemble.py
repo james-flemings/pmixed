@@ -74,10 +74,10 @@ def train_ensemble(args, model_dir):
 
         output_dir = 0
         if args.num_ensemble == 1:
-            output_dir = os.path.join(model_dir, f"lora-{args.model_name}-finetuned-{args.subset}")
+            output_dir = os.path.join(model_dir, f"lora-{args.model_name}-finetuned-{args.dataset}")
         else:
             output_dir = os.path.join(model_dir,
-                                    f"lora-{args.model_name}-{i}-finetuned-{args.subset}")
+                                    f"lora-{args.model_name}-{i}-finetuned-{args.dataset}")
         eval_strat = 'no' if args.dataset == 'lm1b' else 'epoch'
         train_args = TrainingArguments(
             output_dir=output_dir,
@@ -132,17 +132,20 @@ def init_dp_training(rank, args):
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate,
                            weight_decay=args.weight_decay)
     lm_dataset['train'].set_format(type='torch')
-    lm_dataset['validation'].set_format(type='torch')
+    if args.dataset == 'wikitext':
+        lm_dataset['validation'].set_format(type='torch')
 
     train_data_loader = DataLoader(
         lm_dataset['train'],
         batch_size=args.dp_batch_size
     )
 
-    val_data_loader = DataLoader(
-        lm_dataset['validation'],
-        batch_size=args.dp_batch_size
-    )
+    val_data_loader = None
+    if args.dataset == 'wikitext':
+        val_data_loader = DataLoader(
+            lm_dataset['validation'],
+            batch_size=args.dp_batch_size
+        )
 
     privacy_engine = PrivacyEngine(accountant="rdp")
     model, optimizer, train_data_loader = privacy_engine.make_private_with_epsilon(
@@ -190,7 +193,7 @@ def dpsgd(rank, world_size, args, model_dir):
                     #f"Validation Loss: {np.mean(val_losses):.4f} | "
                     f"(ε = {epsilon:.2f})"
                 )
-            output_dir = os.path.join(model_dir, f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.subset}.pt")
+            output_dir = os.path.join(model_dir, f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.dataset}.pt")
             torch.save(model._module, output_dir)
     cleanup()    
 

@@ -86,18 +86,20 @@ plt.legend()
 plt.savefig('plts/probability.png')
 plt.clf()
 
-data = {"Pre-trained": pre_trained, "Fine-Tuned": fine_tuned, "DP-SGD": 35.36, "PMixED": 34.13}
+data = {"Pre-trained": pre_trained, "Fine-Tuned": fine_tuned, "Per-Sample DP-SGD": 35.36, "PMixED": 35.53}
 
 bars = plt.bar(data.keys(), data.values(), width=0.4)
 bars[0].set_color('green')
 bars[1].set_color('red')
-bars[2].set_color('blue')
+bars[2].set_facecolor('deepskyblue')
 bars[3].set_color('gold')
 for bar in bars:
     yval = bar.get_height()
     plt.text(bar.get_x()+0.2, yval+0.1, yval, ha='center')
 #plt.text(35.98, 35.98, 35.98, ha="center")
 
+bars[2].set_hatch("/")
+#bars[2].set_edgecolor()
 plt.ylabel("PPL")
 plt.savefig("plts/comparison.png")
 plt.clf()
