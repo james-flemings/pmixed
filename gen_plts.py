@@ -86,7 +86,8 @@ plt.legend()
 plt.savefig('plts/probability.png')
 plt.clf()
 
-data = {"Pre-trained": pre_trained, "Fine-Tuned": fine_tuned, "Per-Sample DP-SGD": 35.36, "PMixED": 35.53}
+data = {"Pre-trained": pre_trained, "Fine-Tuned": fine_tuned,
+         "Sample-level\nDP-SGD": 35.36, "PMixED": 35.53}
 
 bars = plt.bar(data.keys(), data.values(), width=0.4)
 bars[0].set_color('green')

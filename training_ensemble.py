@@ -91,7 +91,6 @@ def train_ensemble(args, model_dir):
             lr_scheduler_type="linear",
             warmup_steps=500,
         )
-        #train_args = train_args.set_lr_scheduler(name="linear", warmup_steps=500)
         trainer = Trainer(
             model=lora_model,
             args=train_args,

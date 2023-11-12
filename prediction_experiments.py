@@ -23,14 +23,20 @@ def main(args):
     epsilon = args.epsilon - np.log((alpha-1)/alpha) + (np.log(args.delta) + np.log(alpha))/(alpha-1)
     #print("Alpha", alpha)
     #print("Epsilon", epsilon)
+    if args.data_subset == "None":
+        args.data_subset = None
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     pub_model = AutoModelForCausalLM.from_pretrained(args.model_name,
                                                     pad_token_id=tokenizer.eos_token_id).to(
                                                     args.device)
     model_dir = os.path.join("models", f"{args.num_ensemble}_ensemble")
-
-    model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-{args.data_subset}")
+    model_paths = None
+    if args.data_subset == None:
+        model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-{args.dataset}")
+                    for i in range(args.num_ensemble)]
+    else:
+        model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-{args.data_subset}")
                     for i in range(args.num_ensemble)]
     priv_ensemble = Ensemble(model_paths,
                              args.model_name,
@@ -41,15 +47,21 @@ def main(args):
                              eps=epsilon,
                              delta=args.delta,
                              p=args.p)
-
-    fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.data_subset}")
+    fine_tuned_dir = 0 
+    if args.data_subset == None:
+        fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.dataset}")
+    else:
+        fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.data_subset}")
     fine_tuned_model = PeftModel.from_pretrained(copy.deepcopy(pub_model),
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
-    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{args.data_subset}.pt")).to(args.device)
-    #dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.data_subset}.pt")).to(args.device)
-
+    dp_fine_tuned_model = 0
+    if args.data_subset == None:
+        dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{args.dataset}.pt")).to(args.device)
+    else:
+        dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{args.dataset_subset}.pt")).to(args.device)
+ 
     seq_length = 512
     dataset = load_dataset(args.dataset, args.data_subset)
 
