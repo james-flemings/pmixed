@@ -60,7 +60,7 @@ def main(args):
     if args.data_subset == None:
         dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{args.dataset}.pt")).to(args.device)
     else:
-        dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{args.dataset_subset}.pt")).to(args.device)
+        dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{args.data_subset}.pt")).to(args.device)
  
     seq_length = 512
     dataset = load_dataset(args.dataset, args.data_subset)

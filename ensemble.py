@@ -101,7 +101,7 @@ class Ensemble():
         return logits
     
     def subsample(self, candidates, p):
-        sampled = []
+        #sampled = []
         #for c in candidates:
         #    if np.random.uniform() < p:
         #        sampled.append(c)
@@ -112,9 +112,9 @@ class Ensemble():
         sampled = self.subsample([i for i in range(self.num_ensemble)], self.p)
         loss = self.subsample_eps(self.eps/self.q_budget, self.p, self.alpha)
         self.priv_loss.append(loss) 
-        #if len(sampled) == 0:
-        #    self.lambda_history.append(0)
-        #    return output_dists[self.num_ensemble]
+        if len(sampled) == 0:
+            self.lambda_history.append(0)
+            return output_dists[self.num_ensemble]
 
         self.lambdas = np.array([self.lambda_solver_bisection(output_dists[i],
                                                     output_dists[self.num_ensemble],
