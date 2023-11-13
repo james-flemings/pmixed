@@ -87,46 +87,6 @@ plt.legend()
 plt.savefig('plts/probability.png')
 plt.clf()
 
-'''
-data = {"Pre-trained": pre_trained, "Fine-Tuned": fine_tuned,
-         "Sample-level\nDP-SGD": 35.36, "PMixED": 35.53}
-
-bars = plt.bar(data.keys(), data.values(), width=0.4)
-bars[0].set_color('green')
-bars[1].set_color('red')
-bars[2].set_facecolor('deepskyblue')
-bars[3].set_color('gold')
-for bar in bars:
-    yval = bar.get_height()
-    plt.text(bar.get_x()+0.2, yval+0.1, yval, ha='center')
-#plt.text(35.98, 35.98, 35.98, ha="center")
-
-bars[2].set_hatch("/")
-#bars[2].set_edgecolor()
-plt.ylabel("PPL")
-plt.savefig("plts/wikitext_comparison.png")
-plt.clf()
-
-data = {"Pre-trained": 67.73, "Fine-Tuned": 41.27,
-         "Sample-level\nDP-SGD": 54.54, "PMixED": 53.84}
-
-bars = plt.bar(data.keys(), data.values(), width=0.4)
-bars[0].set_color('green')
-bars[1].set_color('red')
-bars[2].set_facecolor('deepskyblue')
-bars[3].set_color('gold')
-for bar in bars:
-    yval = bar.get_height()
-    plt.text(bar.get_x()+0.2, yval+0.1, yval, ha='center')
-#plt.text(35.98, 35.98, 35.98, ha="center")
-
-bars[2].set_hatch("/")
-#bars[2].set_edgecolor()
-plt.ylabel("PPL")
-plt.savefig("plts/lm1b_comparison.png")
-plt.clf()
-'''
-
 width = 0.2
 data = {"Pre-Trained": [pre_trained, 67.73], "Fine-Tuned": [fine_tuned, 41.27],
         "Sample-Level\nDP-SGD": [35.36, 54.54], "PMixED": [35.53, 53.84]}
