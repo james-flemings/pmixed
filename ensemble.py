@@ -23,7 +23,7 @@ class Ensemble():
         self.q_budget = q_budget
         self.alpha = alpha 
         self.eps = eps
-        self.p = p
+        self.p = p 
         self.delta = delta
         self.pub_model = AutoModelForCausalLM.from_pretrained(self.model_name,
                                                      pad_token_id=tokenizer.eos_token_id).to(
@@ -32,17 +32,16 @@ class Ensemble():
         self.num_ensemble = len(self.model_dirs)
         self.lambdas = np.array([0 for _ in range(self.num_ensemble)])
         self.lambda_history = []
-        self.priv_loss = [] 
 
-        if p < 1.0:
-            a = 1 
-            while self.subsample_eps(a * self.eps / self.q_budget, self.p, self.alpha) < (self.eps / self.q_budget):
-                a += 1
+        if self.p < 1.0:
+            gamma = 1 
+            while self.subsample_eps(gamma * self.eps / self.q_budget, self.p, self.alpha) < (self.eps / self.q_budget):
+                gamma += 1
             #print("a value", (a-1))
-            self.eps = self.eps * (a-1)
+            self.eps = self.eps * (gamma-1)
 
         self.target = np.log((self.p * self.num_ensemble) * np.exp((self.alpha-1) * self.eps / self.q_budget)
-                        + 1 - (self.p * self.num_ensemble)) / (4*(self.alpha - 1))
+                        + 1 - (self.p * self.num_ensemble)) / (4 * (self.alpha - 1))
         #print(f"Target value {self.target:2f}")
         self.lora_ensemble = 0 
         for i, dir in enumerate(self.model_dirs):
@@ -59,6 +58,11 @@ class Ensemble():
         return 1/(alpha-1) * np.log((1-p)**(alpha-1) * (1 + (alpha-1) * p) 
                                     + np.sum([comb(alpha, k) * (1-p)**(alpha-k) * p**k *
                                               np.exp((k-1) * eps) for k in range(2, alpha+1)]))
+    def privacy_loss(self, beta, size):
+        if size == 1:
+            return beta * self.alpha
+        return (np.log((size - 1)/size + np.exp((self.alpha-1) * 4 * beta * self.alpha) / size ) 
+                / (self.alpha-1))
 
     @staticmethod
     def renyiDiv(p, q, alpha=float('inf')):
@@ -100,22 +104,22 @@ class Ensemble():
 
         return logits
     
-    def subsample(self, candidates, p):
-        #sampled = []
-        #for c in candidates:
-        #    if np.random.uniform() < p:
-        #        sampled.append(c)
-        sampled = np.random.choice(self.num_ensemble, int(p*self.num_ensemble))
+    def poisson_subsample(self, candidates, p):
+        '''
+        Poisson Subsampling is equivalent to m ~ Binomial(n, p), 
+        then sampling m without replacement from [N]
+        '''
+        sampled = np.random.choice(self.num_ensemble, np.random.binomial(self.num_ensemble, p))
         return sampled
 
     def priv_pred(self, output_dists):
-        sampled = self.subsample([i for i in range(self.num_ensemble)], self.p)
-        loss = self.subsample_eps(self.eps/self.q_budget, self.p, self.alpha)
-        self.priv_loss.append(loss) 
+        sampled = self.poisson_subsample([i for i in range(self.num_ensemble)], self.p)
         if len(sampled) == 0:
             self.lambda_history.append(0)
             return output_dists[self.num_ensemble]
-
+        #self.target = np.log((len(sampled)) * np.exp((self.alpha-1) * self.eps / self.q_budget)
+        #                + 1 - (len(sampled))) / (self.alpha - 1)
+        self.target = self.beta_solver_bisection(len(sampled)) * self.alpha
         self.lambdas = np.array([self.lambda_solver_bisection(output_dists[i],
                                                     output_dists[self.num_ensemble],
                                                     )for i in sampled])
@@ -139,51 +143,6 @@ class Ensemble():
             max_loss = max(max_loss, eps)
         return (max_loss, idx.pop()) if ret_idx else max_loss
     
-    def data_dependent_loss_ub(self, mixed_dists, pub, beta, sigma):
-        ss = self.smooth_sensitivity(mixed_dists, pub, beta)
-        eps = self.data_dependent_loss(mixed_dists, alpha=self.alpha)
-        b = beta * np.random.normal(loc=0.0, scale=0.5*sigma, size=1)
-        c = np.sqrt(2 * np.log(2/(self.delta/2))) 
-        mu = np.log(ss) + b + (c * 0.5*sigma * beta)
-        return (eps + ss * np.random.normal(loc=0.0, scale=sigma, size=1)
-                 + self.sigma * c * np.exp(mu))
-
-    def smooth_sensitivity(self, mixed_dists, p_pub, beta, k=2):
-        X = [i for i in range(self.num_ensemble)] 
-        ss = 0
-        used_idx = [] 
-        eps = 0
-        for i in range(self.num_ensemble):
-            for j in range(i+1, self.num_ensemble):
-                p = torch.cat((mixed_dists[[i]], mixed_dists[[j]]))
-                eps_prime = self.data_dependent_loss(p, alpha=float('Inf'))
-                if  eps_prime > eps:
-                    used_idx = [i, j]
-                    eps = eps_prime 
-        ranked_dists = torch.cat((mixed_dists[[used_idx[0]]], mixed_dists[[used_idx[1]]]))
-
-        full_ids = {i for i in range(self.num_ensemble)}
-        for _ in range(self.num_ensemble-2):
-            ls = 0
-            id = 0
-            eps = self.data_dependent_loss(ranked_dists, alpha=float("Inf"))
-            for m in full_ids.difference(set(used_idx)):
-                eps_prime = self.data_dependent_loss(torch.cat((ranked_dists, mixed_dists[[m]])), alpha=float("Inf"))
-                ls_prime = abs(eps - eps_prime)
-                if ls_prime > ls:
-                    ls = ls_prime
-                    id = m
-            used_idx.append(id)
-            ranked_dists = torch.cat((ranked_dists, mixed_dists[[id]]))
-
-        ss_prime_eff = np.exp(-beta * k) * self.local_sensitivity(ranked_dists[:3, :]) 
-        return ss_prime_eff
-
-    def local_sensitivity(self, mixed_dists):
-        eps = self.data_dependent_loss(mixed_dists, alpha=self.alpha)
-        X = combinations([i for i in range(len(mixed_dists))], len(mixed_dists)-1)
-        return max([abs(eps - self.data_dependent_loss(mixed_dists[list(x)], alpha=self.alpha, ret_idx=False)) for x in X])
-    
     def data_independent_loss(self, p_mix, p_pub, alpha):
         return  max(self.renyiDiv(p_mix, p_pub, alpha=alpha),
                    self.renyiDiv(p_pub, p_mix, alpha=alpha)).item()
@@ -199,22 +158,12 @@ class Ensemble():
             lambd = bisect(f, 0, 1, maxiter=100, disp=False)
         return lambd
     
-    def lambda_solver_iter(self, p, p_pub, lambd):
-        while lambd > 0:
-            pred = self.mix(p, p_pub, lambd)
-            eps = self.data_independent_loss(pred, p_pub, self.alpha)
-            if eps < self.target:
-                return lambd
-            lambd -= 0.01
-        return lambd
-
-
-    def lambda_solver(self, p_priv, p_pub):
-        val_1 = ((np.exp(self.target) - 1) * p_pub) / (p_priv - p_pub)
-        val_2 = ((1 / np.exp(self.target) - 1) * p_pub) / (p_priv - p_pub)
-        val = torch.max(val_1, val_2)
-        val = torch.min(val, torch.ones(val.size()[0]))
-        return val
+    def beta_solver_bisection(self, size):
+        def f(beta):
+            eps = self.privacy_loss(beta, size)
+            sub_eps = self.subsample_eps(eps, self.p, self.alpha)
+            return (sub_eps - self.eps/self.q_budget)
+        return bisect(f, 0, 5, maxiter=100, disp=False)
 
     def mix(self, p, p_prime, lambd=0.5):
         return (lambd * p + (1-lambd) * p_prime)
@@ -232,12 +181,6 @@ class Ensemble():
         print("-----------------------------")
         print(f"Max lambda value: {np.max(self.lambda_history):.3f}")
         print("-----------------------------")
-
-    def plot_individual_loss(self):
-        x = [i for i in range(len(self.priv_loss))]
-        plt.plot(x, self.priv_loss)
-        plt.savefig(os.path.join("plts", "priv_loss.png"))
-        plt.clf()
 
     def plot_lambdas(self):
         x = [i for i in range(len(self.lambda_history))]

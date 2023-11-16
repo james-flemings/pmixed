@@ -13,8 +13,8 @@ ens_s, ens_e = 9, 13
 alp_s, alp_e = 13, 18 
 p_s, p_e = 18, 22
 
-pre_trained = 40.86
-fine_tuned = 27.25
+pre_trained = 38.64
+fine_tuned = 23.62
 yticks = [25, 30, 35, 40]
 
 plt.plot(df.iloc[eps_s:eps_e]['epsilon'], df.iloc[eps_s:eps_e]['ppl'], linewidth=2,
@@ -88,8 +88,8 @@ plt.savefig('plts/probability.png')
 plt.clf()
 
 width = 0.2
-data = {"Pre-Trained": [pre_trained, 67.73], "Fine-Tuned": [fine_tuned, 41.27],
-        "Sample-Level\nDP-SGD": [35.36, 54.54], "PMixED": [35.53, 53.84]}
+data = {"Pre-Trained": [pre_trained, 69.93], "Fine-Tuned": [fine_tuned, 42.33],
+        "Sample-Level\nDP-SGD": [32.02, 56.37], "PMixED": [30.81, 49.65]}
 
 datasets = ["WikiText-103", "One Billion Word"]
 x = np.arange(len(datasets))

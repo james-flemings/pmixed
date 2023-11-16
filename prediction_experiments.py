@@ -8,7 +8,7 @@ import os
 import argparse
 from ensemble import Ensemble
 from datasets import load_dataset
-from training_ensemble import group_texts, tokenize_function
+from training_ensemble import group_texts, sample_level_tokenize_function
 from peft import PeftModel
 import copy
 import tqdm
@@ -60,13 +60,13 @@ def main(args):
     if args.data_subset == None:
         dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{args.dataset}.pt")).to(args.device)
     else:
-        dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{args.data_subset}.pt")).to(args.device)
+        dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{args.dataset}.pt")).to(args.device)
  
     seq_length = 512
     dataset = load_dataset(args.dataset, args.data_subset)
 
     remove_columns = ["text"] 
-    tokenized_dataset = dataset.map(tokenize_function,
+    tokenized_dataset = dataset.map(sample_level_tokenize_function,
                                     fn_kwargs={"tokenizer": tokenizer},
                                     batched=True,
                                     num_proc=4,
@@ -163,7 +163,7 @@ if __name__ == "__main__":
     dpsgd_ppl_list = []
     ensemble_ppl_list = []
     step_size = args.query_budget // args.seq_length
-    for i in range(0, args.iters):
+    for i in tqdm.tqdm(range(0, args.iters)):
         args.start = i * step_size 
         pub_ppl, ft_ppl, dpsgd_ppl, ensemble_ppl = main(args)
         pub_ppl_list.append(pub_ppl)

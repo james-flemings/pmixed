@@ -13,9 +13,10 @@ import os
 import math
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, TrainingArguments, Trainer, set_seed
 from peft import LoraConfig, get_peft_model
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 from tqdm import tqdm
 import numpy as np
+import pandas as pd
 import argparse
 import tqdm
 
@@ -27,8 +28,12 @@ def init_training(args):
     if args.subset == "None":
         args.subset = None
     dataset = load_dataset(args.dataset, args.subset)
-    #remove_columns = ["text"] if args.dataset == "wikitext" else None
-    remove_columns = ['text']
+    remove_columns = [c for c in dataset['train'].column_names if c != "author"] if args.dataset == 'reddit' \
+                        else ['text']
+
+    tokenize_function = author_level_tokenize_function if args.dataset == "reddit" \
+          else sample_level_tokenize_function
+          
     tokenized_dataset = dataset.map(tokenize_function,
                                     fn_kwargs={"tokenizer": tokenizer},
                                     batched=True,
@@ -102,9 +107,11 @@ def train_ensemble(args, model_dir):
         #print(f"\n\nPerplexity: {math.exp(eval_results['eval_loss']):.2f}\n\n")
         trainer.save_model(output_dir)
 
-def tokenize_function(examples, tokenizer):
+def sample_level_tokenize_function(examples, tokenizer):
     return tokenizer(examples["text"])
 
+def author_level_tokenize_function(examples, tokenizer, block_size):
+    return tokenizer(examples["content"], padding="max_length", truncation=True, max_length=block_size)
 
 def group_texts(examples, block_size):
     concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
@@ -116,6 +123,12 @@ def group_texts(examples, block_size):
     }
     result["labels"] = result["input_ids"].copy()
     return result
+
+def create_author_mapping(dataset: Dataset, author: str):
+    with dataset.formatted_as(type='pandas'):
+        authors = pd.DataFrame(data={'author': dataset[author]})
+        author_mapping = [g.index.values for _, g in authors.groupby('author')]
+    return author_mapping 
 
 def init_dp_training(rank, args):
     lm_dataset, tokenizer, pretrained_model = init_training(args)
@@ -146,7 +159,7 @@ def init_dp_training(rank, args):
             batch_size=args.dp_batch_size
         )
 
-    privacy_engine = PrivacyEngine(accountant="rdp")
+    privacy_engine = PrivacyEngine()
     model, optimizer, train_data_loader = privacy_engine.make_private_with_epsilon(
         module=model,
         optimizer=optimizer,
@@ -252,7 +265,7 @@ if __name__ == "__main__":
     parser.add_argument("--learning_rate", type=float, default=2e-4)
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--dp_batch_size", type=int, default=32)
+    parser.add_argument("--dp_batch_size", type=int, default=256)
     parser.add_argument("--training_type", type=str, default="sub-samp-and-agg")
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--noise_multiplier", type=float, default=1.)
