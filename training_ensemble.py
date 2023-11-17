@@ -78,11 +78,13 @@ def train_ensemble(args, model_dir):
         #print_trainable_parameters(lora_model)
 
         output_dir = 0
+        data = None if args.subset == None else args.subset
+
         if args.num_ensemble == 1:
-            output_dir = os.path.join(model_dir, f"lora-{args.model_name}-finetuned-{args.subset}")
+            output_dir = os.path.join(model_dir, f"lora-{args.model_name}-finetuned-{data}")
         else:
             output_dir = os.path.join(model_dir,
-                                    f"lora-{args.model_name}-{i}-finetuned-{args.subset}")
+                                    f"lora-{args.model_name}-{i}-finetuned-{data}")
         eval_strat = 'no' if args.dataset == 'lm1b' else 'epoch'
         train_args = TrainingArguments(
             output_dir=output_dir,

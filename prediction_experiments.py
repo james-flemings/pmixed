@@ -66,20 +66,19 @@ def main(args):
     dataset = load_dataset(args.dataset, args.data_subset)
 
     remove_columns = ["text"] 
-    tokenized_dataset = dataset.map(sample_level_tokenize_function,
+    tokenized_dataset = dataset['test'].map(sample_level_tokenize_function,
                                     fn_kwargs={"tokenizer": tokenizer},
                                     batched=True,
                                     num_proc=4,
                                     remove_columns=remove_columns
                                     )
-    lm_dataset = tokenized_dataset.map(
+    test_data = tokenized_dataset.map(
         group_texts,
         fn_kwargs={"block_size": seq_length},
         batched=True,
         num_proc=4
     ) 
 
-    test_data = lm_dataset['test']
     test_data.set_format(type="torch")
 
     pub_neg_log_likelihood = []

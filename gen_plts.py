@@ -13,9 +13,32 @@ ens_s, ens_e = 9, 13
 alp_s, alp_e = 13, 18 
 p_s, p_e = 18, 22
 
-pre_trained = 38.64
+pre_trained = 38.63
 fine_tuned = 23.62
 yticks = [25, 30, 35, 40]
+
+width = 0.2
+data = {"Pre-Trained": [38.63, 69.93], "Fine-Tuned": [25.11, 41.27],
+        "Sample-Level\nDP-SGD": [32.96, 56.37], "PMixED": [32.14, 53.49]}
+
+datasets = ["WikiText-103", "One Billion Word"]
+x = np.arange(len(datasets))
+
+pre_trained_bars = plt.bar(x-3*width/2, data['Pre-Trained'], width, label="Pre-Trained", color='green')
+fine_tuned_bars = plt.bar(x-width/2, data['Fine-Tuned'], width, label="Fine-Tuned", color='red')
+dpsgd_bars = plt.bar(x + width/2, data["Sample-Level\nDP-SGD"], width, label="Sample-Level\nDP-SGD", facecolor='deepskyblue', hatch='/')
+pmixed_bars = plt.bar(x + 3*width/2, data['PMixED'], width, label="PMixED", color='gold')
+
+for bars in [pre_trained_bars, fine_tuned_bars, dpsgd_bars, pmixed_bars]:
+    for bar in bars:
+        yval = bar.get_height()
+        plt.text(bar.get_x()+0.1, yval+0.1, yval, ha='center')
+
+plt.legend()
+plt.xticks(x, datasets)
+plt.ylabel("PPL")
+plt.savefig("plts/comparison.png")
+plt.clf()
 
 plt.plot(df.iloc[eps_s:eps_e]['epsilon'], df.iloc[eps_s:eps_e]['ppl'], linewidth=2,
           label="PMixED", color='gold', marker='o')
@@ -85,27 +108,4 @@ plt.yticks(yticks)
 plt.ylabel("PPL")
 plt.legend()
 plt.savefig('plts/probability.png')
-plt.clf()
-
-width = 0.2
-data = {"Pre-Trained": [pre_trained, 69.93], "Fine-Tuned": [fine_tuned, 42.33],
-        "Sample-Level\nDP-SGD": [32.02, 56.37], "PMixED": [30.81, 49.65]}
-
-datasets = ["WikiText-103", "One Billion Word"]
-x = np.arange(len(datasets))
-
-pre_trained_bars = plt.bar(x-3*width/2, data['Pre-Trained'], width, label="Pre-Trained", color='green')
-fine_tuned_bars = plt.bar(x-width/2, data['Fine-Tuned'], width, label="Fine-Tuned", color='red')
-dpsgd_bars = plt.bar(x + width/2, data["Sample-Level\nDP-SGD"], width, label="Sample-Level\nDP-SGD", facecolor='deepskyblue', hatch='/')
-pmixed_bars = plt.bar(x + 3*width/2, data['PMixED'], width, label="PMixED", color='gold')
-
-for bars in [pre_trained_bars, fine_tuned_bars, dpsgd_bars, pmixed_bars]:
-    for bar in bars:
-        yval = bar.get_height()
-        plt.text(bar.get_x()+0.1, yval+0.1, yval, ha='center')
-
-plt.legend()
-plt.xticks(x, datasets)
-plt.ylabel("PPL")
-plt.savefig("plts/comparison.png")
 plt.clf()
