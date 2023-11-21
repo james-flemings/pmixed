@@ -265,7 +265,7 @@ if __name__ == "__main__":
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--dp_batch_size", type=int, default=256)
-    parser.add_argument("--training_type", type=str, default="sub-samp-and-agg")
+    parser.add_argument("--training_type", type=str, default="samp-agg")
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--noise_multiplier", type=float, default=1.)
     parser.add_argument("--max_grad_norm", type=float, default=1.)
@@ -286,7 +286,7 @@ if __name__ == "__main__":
     if not os.path.exists(model_dir):
         os.mkdir(model_dir)
 
-    if args.training_type == "sub-samp-and-agg":
+    if args.training_type == "samp-agg":
         train_ensemble(args, model_dir)
     elif args.training_type == "dpsgd":
         mp.spawn(
