@@ -1,4 +1,4 @@
-# priv_pred_ensemble
+# PMixED: Private Mixing of Ensemble Distributions 
 
 An algorithm involving Low-Rank Adaptation (LoRA), subsample-and-aggregate, and RDP filters to achieve RDP prediction.
 
