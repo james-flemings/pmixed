@@ -49,7 +49,7 @@ class Ensemble():
                                             )
                                         )
     def privacy_loss(self, beta, size, alpha):
-        if size == 1:
+        if size == 1 or size == 0:
             return beta * alpha
         return (np.log((size - 1)/size + np.exp((alpha-1) * 4 * beta * alpha) / size ) 
                 / (alpha-1))

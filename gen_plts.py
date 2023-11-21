@@ -3,23 +3,19 @@ import csv
 import pandas as pd
 import numpy as np
 
-file_name = "results.csv"
-
-df = pd.read_csv(file_name)
-
 eps_s, eps_e = 0, 5 
 qb_s, qb_e = 5, 9 
-ens_s, ens_e = 9, 13 
-alp_s, alp_e = 13, 18 
-p_s, p_e = 18, 22
+ens_s, ens_e = 9, 12 
+alp_s, alp_e = 12, 16 
+p_s, p_e = 16, 20
 
-pre_trained = 38.63
-fine_tuned = 23.62
+pre_trained = 40.86
+fine_tuned = 27.25
 yticks = [25, 30, 35, 40]
 
 width = 0.2
-data = {"Pre-Trained": [38.63, 69.93], "Fine-Tuned": [25.11, 41.27],
-        "Sample-Level\nDP-SGD": [32.96, 56.37], "PMixED": [32.14, 53.49]}
+data = {"Pre-Trained": [38.63, 67.93], "Fine-Tuned": [25.11, 40.93],
+        "Sample-Level\nDP-SGD": [32.96, 53.95], "PMixED": [31.95, 50.91]}
 
 datasets = ["WikiText-103", "One Billion Word"]
 x = np.arange(len(datasets))
@@ -39,6 +35,9 @@ plt.xticks(x, datasets)
 plt.ylabel("PPL")
 plt.savefig("plts/comparison.png")
 plt.clf()
+
+file_name = "results.csv"
+df = pd.read_csv(file_name)
 
 plt.plot(df.iloc[eps_s:eps_e]['epsilon'], df.iloc[eps_s:eps_e]['ppl'], linewidth=2,
           label="PMixED", color='gold', marker='o')
@@ -64,7 +63,7 @@ plt.xlabel("Number of Ensembles")
 plt.yticks(yticks)
 #plt.xticks([8, 16, 32, 64])
 plt.ylabel("PPL")
-plt.legend()
+plt.legend(loc='upper left', bbox_to_anchor=(0, 0.9))
 plt.savefig('plts/ensemble.png')
 plt.clf()
 
@@ -76,7 +75,7 @@ plt.plot(df.iloc[alp_s:alp_e]['alpha'], [fine_tuned for _ in range((alp_e-alp_s)
           linestyle='dashed', linewidth=2, label='Fine-tuned', color="red")
 plt.xlabel("Alpha")
 plt.yticks(yticks)
-plt.xticks([3, 4, 5, 6, 7])
+plt.xticks([3, 4, 5, 6])
 plt.ylabel("PPL")
 plt.legend()
 plt.savefig('plts/alpha.png')
@@ -92,7 +91,7 @@ plt.xlabel("Query Budget")
 plt.yticks(yticks)
 plt.xticks([512, 1024, 2048, 4096])
 plt.ylabel("PPL")
-plt.legend()
+plt.legend(loc='upper left', bbox_to_anchor=(0, 0.9))
 plt.savefig('plts/query_budget.png')
 plt.clf()
 
@@ -106,6 +105,6 @@ plt.xlabel("Subsample probability")
 plt.yticks(yticks)
 #plt.xticks([1/16, 1/8, 1/4, 1/2, 1])
 plt.ylabel("PPL")
-plt.legend()
+plt.legend(loc='upper left', bbox_to_anchor=(0, 0.9))
 plt.savefig('plts/probability.png')
 plt.clf()

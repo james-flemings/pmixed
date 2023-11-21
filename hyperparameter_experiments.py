@@ -16,7 +16,7 @@ p_s = [0.02, 0.03, 0.05, 0.1]
 
 default_epsilon = 8
 default_query_budget = 1024 
-default_num_ensembles = 64 
+default_num_ensembles = 80 
 default_p = 0.03
 default_iters = 2**3
 default_alpha = 3

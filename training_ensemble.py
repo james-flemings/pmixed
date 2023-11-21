@@ -5,12 +5,9 @@ import torch.optim as optim
 import torch.multiprocessing as mp
 import torch.distributed as dist
 from opacus.distributed import DifferentiallyPrivateDistributedDataParallel as DPDDP
-from opacus.optimizers import DistributedDPOptimizer
-from opacus.data_loader import DPDataLoader
 from opacus.utils.batch_memory_manager import BatchMemoryManager
 from opacus import PrivacyEngine
 import os
-import math
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, TrainingArguments, Trainer, set_seed
 from peft import LoraConfig, get_peft_model
 from datasets import load_dataset, Dataset

@@ -162,7 +162,7 @@ if __name__ == "__main__":
     dpsgd_ppl_list = []
     ensemble_ppl_list = []
     step_size = args.query_budget // args.seq_length
-    for i in tqdm.tqdm(range(0, args.iters)):
+    for i in tqdm.tqdm(range(0, args.iters), desc="Runs"):
         args.start = i * step_size 
         pub_ppl, ft_ppl, dpsgd_ppl, ensemble_ppl = main(args)
         pub_ppl_list.append(pub_ppl)
