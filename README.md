@@ -1,6 +1,6 @@
 # PMixED: Private Mixing of Ensemble Distributions 
 
-PMixED is a differentially private next token prediction protocol that mixes the output distribution of privacy-sensitive fine-tuned models and of a public model.  
+PMixED is a differentially private next token prediction protocol that mixes the output distribution of privacy-sensitive fine-tuned models and the output distribution of a public model.  
 
 ## Evironment Setup
 We used Python3.10 in our implementation. Run the following lines to set up the evironment: 
