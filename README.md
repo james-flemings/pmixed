@@ -15,7 +15,7 @@ python3.10 -m pip install -r requirements.txt
 ```
 
 ## Ensemble/DP model Setup
-Fine-tuned models used in the paper can be accessed [here](https://drive.google.com/file/d/1QW70rCqhSPd7KyzrGZk8noK6v5SRArlr/view?usp=sharing). Be sure to untar the file in the root directory of this directory. However, if you decide to train the ensemble from scratch, then use the following command to reproduce our models:
+Fine-tuned models used in the paper can be accessed [here](https://drive.google.com/file/d/1xgrwdF7O9GKIJF9w-z0Ypm01U8ll2sHb/view?usp=sharing). Be sure to untar the file in the root directory of this directory. However, if you decide to train the ensemble from scratch, then use the following command to reproduce our models:
 
 ```bash
 python -m torch.distributed.run --nproc_per_node=num_gpus fine_tune_ensemble.py \
