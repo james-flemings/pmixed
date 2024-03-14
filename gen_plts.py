@@ -89,7 +89,7 @@ plt.plot(df.iloc[qb_s:qb_e]['query_budget'], [fine_tuned for _ in range((qb_e-qb
           linestyle='dashed', linewidth=2, label='Fine-tuned', color="red")
 plt.xlabel("Query Budget")
 plt.yticks(yticks)
-plt.xticks([512, 1024, 2048, 4096])
+plt.xticks([512, 1024, 2048, 4096, 8192])
 plt.ylabel("PPL")
 plt.legend(loc='upper left', bbox_to_anchor=(0, 0.9))
 plt.savefig('plts/query_budget.png')
