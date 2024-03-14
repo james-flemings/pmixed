@@ -1,6 +1,6 @@
 # PMixED: Private Mixing of Ensemble Distributions 
 
-PMixED is a differentially private next token prediction protocol that mixes the output distribution of privacy-sensitive fine-tuned models and of a public model.  
+PMixED is a differentially private next token prediction protocol that mixes the output distribution of privacy-sensitive fine-tuned models and the output distribution of a public model.  
 
 ## Evironment Setup
 We used Python3.10 in our implementation. Run the following lines to set up the evironment: 
@@ -15,7 +15,7 @@ python3.10 -m pip install -r requirements.txt
 ```
 
 ## Ensemble/DP model Setup
-Fine-tuned models used in the paper can be accessed [here](https://drive.google.com/file/d/1QW70rCqhSPd7KyzrGZk8noK6v5SRArlr/view?usp=sharing). Be sure to untar the file in the root directory of this directory. However, if you decide to train the ensemble from scratch, then use the following command to reproduce our models:
+Fine-tuned models used in the paper can be accessed [here](https://drive.google.com/file/d/1xgrwdF7O9GKIJF9w-z0Ypm01U8ll2sHb/view?usp=sharing). Be sure to untar the file in the root directory of this directory. However, if you decide to train the ensemble from scratch, then use the following command to reproduce our models:
 
 ```bash
 python -m torch.distributed.run --nproc_per_node=num_gpus fine_tune_ensemble.py \
