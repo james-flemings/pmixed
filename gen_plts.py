@@ -4,10 +4,10 @@ import pandas as pd
 import numpy as np
 
 eps_s, eps_e = 0, 5 
-qb_s, qb_e = 5, 9 
-ens_s, ens_e = 9, 12 
-alp_s, alp_e = 12, 16 
-p_s, p_e = 16, 20
+qb_s, qb_e = 5, 10 
+ens_s, ens_e = 10, 15 
+alp_s, alp_e = 15, 19 
+p_s, p_e = 19, 25
 
 pre_trained = 40.86
 fine_tuned = 27.25
@@ -63,7 +63,7 @@ plt.xlabel("Number of Ensembles")
 plt.yticks(yticks)
 #plt.xticks([8, 16, 32, 64])
 plt.ylabel("PPL")
-plt.legend(loc='upper left', bbox_to_anchor=(0, 0.9))
+plt.legend(loc='center left')#, bbox_to_anchor=(0, 0.9))
 plt.savefig('plts/ensemble.png')
 plt.clf()
 

@@ -8,11 +8,11 @@ results_file = "results.csv"
 parameters = ["epsilon", 'num_ensemble', 'query_budget', 'alpha', 'p', 'ppl']
 
 epsilons = [2, 4, 6, 8, 10]
-num_ensembles = [32, 64, 80]
-query_budgets = [512, 1024, 2048, 4096]
-iters = [2**4, 2**3, 2**2, 2**1]
+num_ensembles = [16, 32, 64, 80, 100]
+query_budgets = [512, 1024, 2048, 4096, 8192]
+iters = [2**4, 2**3, 2**2, 2**1, 2**0]
 alphas = [3, 4, 5, 6]
-p_s = [0.02, 0.03, 0.05, 0.1]
+p_s = [0.02, 0.03, 0.05, 0.1, 0.25, 0.5]
 
 default_epsilon = 8
 default_query_budget = 1024 
@@ -57,7 +57,6 @@ with open(results_file, 'w') as f:
         default_alpha = math.ceil(4 * np.log(1 / delta) / (3 * epsilon) + 1)
         results = get_results(epsilon, default_query_budget, default_alpha, default_num_ensembles, default_p, default_iters)
         w.writerow(results)
-
     default_alpha = 3
 
     for q_budget, iter in tqdm.tqdm(zip(query_budgets, iters), desc="Query Budget"):
