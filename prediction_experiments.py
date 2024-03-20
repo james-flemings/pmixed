@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
 import os 
 import argparse
-from ensemble import Ensemble
+from pmixed import PMixED 
 from datasets import load_dataset
 from fine_tune_ensemble import group_texts, sample_level_tokenize_function
 from peft import PeftModel
@@ -38,15 +38,21 @@ def main(args):
     else:
         model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-{args.subset}")
                     for i in range(args.num_ensemble)]
-    priv_ensemble = Ensemble(model_paths,
+    priv_ensemble = PMixED(model_paths,
                              args.model_name,
                              tokenizer,
                              args.device,
                              q_budget=args.query_budget,
                              alpha=alpha,
-                             eps=epsilon,
                              delta=args.delta,
-                             p=args.p)
+                             p=args.p,
+                             eps=epsilon,
+                             beta=args.beta,
+                             lambd=args.lambd,
+                             threshold=args.threshold,
+                             top_k=args.top_k,
+                             sigma=args.sigma
+    )
     fine_tuned_dir = 0 
     if args.subset == None:
         fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.dataset}")
@@ -126,11 +132,12 @@ def main(args):
     #print(f"Perplexity score for Ensemble Private Prediction Model: {ensemble_ppl.mean():.2f}")
 
     #priv_ensemble.print_priv_losses()
-    #priv_ensemble.print_lambdas()
+    priv_ensemble.print_lambdas()
+    priv_ensemble.print_noisy_rd()
     #priv_ensemble.plot_individual_loss()
     #priv_ensemble.plot_lambdas()
 
-    return pre_trained_ppl.mean().cpu(), fine_tuned_ppl.mean().cpu(), dp_fine_tuned_ppl.mean().cpu(), ensemble_ppl.mean().cpu()
+    return pre_trained_ppl.mean().cpu(), fine_tuned_ppl.mean().cpu(), dp_fine_tuned_ppl.mean().cpu(), ensemble_ppl.mean().cpu(), priv_ensemble.priv_loss, priv_ensemble.num_noisy
 
 def calc_loss(logits, labels):
     shift_logits = logits[..., :-1, :].contiguous()
@@ -153,6 +160,11 @@ if __name__ == "__main__":
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--p", type=float, default=1.0)
+    parser.add_argument("--lambd", type=float, default=0.1)
+    parser.add_argument("--beta", type=float, default=0.09)
+    parser.add_argument("--threshold", type=float, default=None)
+    parser.add_argument("--sigma", type=float, default=0.3)
+    parser.add_argument("--top_k", type=int, default=100)
     parser.add_argument("--iters", type=int, default=1)
     parser.add_argument("--start", type=int, default=0)
     args = parser.parse_args()
@@ -161,14 +173,19 @@ if __name__ == "__main__":
     ft_ppl_list = []
     dpsgd_ppl_list = []
     ensemble_ppl_list = []
+    priv_loss_list = []
     step_size = args.query_budget // args.seq_length
     for i in tqdm.tqdm(range(0, args.iters), desc="Runs"):
         args.start = i * step_size 
-        pub_ppl, ft_ppl, dpsgd_ppl, ensemble_ppl = main(args)
+        pub_ppl, ft_ppl, dpsgd_ppl, ensemble_ppl, priv_loss, num_noisy = main(args)
         pub_ppl_list.append(pub_ppl)
         ft_ppl_list.append(ft_ppl)
         dpsgd_ppl_list.append(dpsgd_ppl)
         ensemble_ppl_list.append(ensemble_ppl)
+        priv_loss_list.append(priv_loss)
+        eps = priv_loss + np.log((args.alpha-1)/args.alpha) - (np.log(args.delta) + np.log(args.alpha))/(args.alpha-1)
+        print(f"Total privacy loss of PMixED: {eps:.3f}")
+        print(f"Number of times used Noisy Mechanism PMixED: {num_noisy}")
 
     print(f"Perplexity score of public model: {np.mean(pub_ppl_list):.2f}")
     print(f"Perplexity score of fine-tuned model: {np.mean(ft_ppl_list):.2f}")

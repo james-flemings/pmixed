@@ -60,3 +60,27 @@ python prediction_experiments.py \
 ```
 
 And for the Ablation Study on the hyperparameters: ```python hyperparameter_experiments.py```.
+
+
+## Noisy Screening
+To reproduce our comparison result, run the following command
+```bash
+python prediction_experiments.py \
+    --num_ensemble=100 \
+    --model_name=GPT2 \
+    --dataset=wikitext \
+    --subset=wikitext-103-raw-v1 \
+    --device=cuda:7 \
+    --seq_length=512 \
+    --epsilon=8.0 \
+    --query_budget=1024 \
+    --alpha=4 \
+    --delta=1e-5 \
+    --p=0.03 \
+    --lambd=0.01 \
+    --beta=0.95 \
+    --threshold=10.0 \
+    --sigma=0.2 \
+    --top_k=20 \
+    --iters=1
+```
