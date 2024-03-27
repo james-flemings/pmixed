@@ -60,3 +60,16 @@ python prediction_experiments.py \
 ```
 
 And for the Ablation Study on the hyperparameters: ```python hyperparameter_experiments.py```.
+
+## Citation
+If you use this repository, please consider citing our work: 
+```stex
+@misc{flemings2024differentially,
+      title={Differentially Private Next-Token Prediction of Large Language Models}, 
+      author={James Flemings and Meisam Razaviyayn and Murali Annavaram},
+      year={2024},
+      eprint={2403.15638},
+      archivePrefix={arXiv},
+      primaryClass={cs.CR}
+}
+```
