@@ -1,6 +1,11 @@
 # PMixED: Private Mixing of Ensemble Distributions 
+This is the software implementation of PMixED from the paper [Differentially Private Next-Token Prediction of Large Language Models](https://arxiv.org/pdf/2403.15638.pdf). PMixED is a differentially private next token prediction protocol that takes advantage of two facts: (1) randomness comes for free if sampling the probability output distribution from a language model; (2) employing a public language model can bound the privacy lekage of private data. PMixED partitions a private downstream dataset $D$ into pairwise disjoint subsets $D_i$, each of which is fine-tuned with an LLM $p_i$. Then for each query $\mathbf{x}_t$ recieved by PMixED, it subsamples a random subset of the ensemble, then produces the output probability distributions of each private model $p_i(\mathbf{x}_t)$ and the output probability distribution of a public model $p_0(\mathbf{x}_t)$. Each $p_i(\mathbf{x}_t)$ is projected along a Renyi Divergence ball centered at $p_0(\mathbf{x}_t)$ to produce $\overline{p}_i(\mathbf{x}_t)$. Lastly, each $\overline{p}_i(\mathbf{x}_t)$ is averaged then sampled. The figure below succintly illustrates this. 
 
-PMixED is a differentially private next token prediction protocol that mixes the output distribution of privacy-sensitive fine-tuned models and the output distribution of a public model.  
+![PMixED Overview](/assets/PMixED_overview.png)
+
+In the paper, we showed that PMixED satisfies DP and achieves group-level privacy. To reduce the storage cost of our implementation, we used LoRA adapter weights for our ensemble. Our results show that PMixED improves the prediction perplexity of LLMs over DP-SGD.  
+
+<img src="plts/comparison.png" width="400">
 
 ## Evironment Setup
 We used Python3.10 in our implementation. Run the following lines to set up the evironment: 
@@ -64,12 +69,10 @@ And for the Ablation Study on the hyperparameters: ```python hyperparameter_expe
 ## Citation
 If you use this repository, please consider citing our work: 
 ```stex
-@misc{flemings2024differentially,
-      title={Differentially Private Next-Token Prediction of Large Language Models}, 
-      author={James Flemings and Meisam Razaviyayn and Murali Annavaram},
-      year={2024},
-      eprint={2403.15638},
-      archivePrefix={arXiv},
-      primaryClass={cs.CR}
+@article{flemings2024differentially,
+  title={Differentially Private Next-Token Prediction of Large Language Models},
+  author={Flemings, James and Razaviyayn, Meisam and Annavaram, Murali},
+  journal={arXiv preprint arXiv:2403.15638},
+  year={2024}
 }
 ```
