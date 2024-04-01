@@ -51,9 +51,9 @@ def main(args):
                              lambd=args.lambd,
                              threshold=args.threshold,
                              top_k=args.top_k,
-                             sigma=args.sigma
+                             sigma=args.sigma,
+                             accounting_method=args.accounting_method
     )
-    fine_tuned_dir = 0 
     if args.subset == None:
         fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.dataset}")
     else:
@@ -134,10 +134,16 @@ def main(args):
     #priv_ensemble.print_priv_losses()
     priv_ensemble.print_lambdas()
     priv_ensemble.print_noisy_rd()
-    #priv_ensemble.plot_individual_loss()
-    #priv_ensemble.plot_lambdas()
+    priv_ensemble.plot_lambdas()
 
-    return pre_trained_ppl.mean().cpu(), fine_tuned_ppl.mean().cpu(), dp_fine_tuned_ppl.mean().cpu(), ensemble_ppl.mean().cpu(), priv_ensemble.priv_loss, priv_ensemble.num_noisy
+    return pre_trained_ppl.mean().cpu(), \
+        fine_tuned_ppl.mean().cpu(), \
+        dp_fine_tuned_ppl.mean().cpu(), \
+        ensemble_ppl.mean().cpu(), \
+        priv_ensemble.priv_loss, \
+        priv_ensemble.num_noisy, \
+        priv_ensemble.num_non_sample, \
+        priv_ensemble.num_noise
 
 def calc_loss(logits, labels):
     shift_logits = logits[..., :-1, :].contiguous()
@@ -153,6 +159,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="wikitext")
     parser.add_argument("--subset", type=str, default="wikitext-103-raw-v1")
     parser.add_argument("--device", type=str, default="cuda:6")
+    parser.add_argument("--accounting_method", type=str, default=None)
     parser.add_argument("--seq_length", type=int, default=512)
     parser.add_argument("--query_budget", type=int, default=1024)
     parser.add_argument("--epsilon", type=float, default=8.0)
@@ -173,21 +180,29 @@ if __name__ == "__main__":
     ft_ppl_list = []
     dpsgd_ppl_list = []
     ensemble_ppl_list = []
-    priv_loss_list = []
+    eps_list = []
+    num_noisy_list = []
+    num_noise_list = []
     step_size = args.query_budget // args.seq_length
     for i in tqdm.tqdm(range(0, args.iters), desc="Runs"):
         args.start = i * step_size 
-        pub_ppl, ft_ppl, dpsgd_ppl, ensemble_ppl, priv_loss, num_noisy = main(args)
+        pub_ppl, ft_ppl, dpsgd_ppl, ensemble_ppl, priv_loss, num_noisy, num_non_sample, num_noise = main(args)
         pub_ppl_list.append(pub_ppl)
         ft_ppl_list.append(ft_ppl)
         dpsgd_ppl_list.append(dpsgd_ppl)
         ensemble_ppl_list.append(ensemble_ppl)
-        priv_loss_list.append(priv_loss)
         eps = priv_loss + np.log((args.alpha-1)/args.alpha) - (np.log(args.delta) + np.log(args.alpha))/(args.alpha-1)
+        eps_list.append(eps)
+        num_noisy_list.append(num_noisy)
+
         print(f"Total privacy loss of PMixED: {eps:.3f}")
         print(f"Number of times used Noisy Mechanism PMixED: {num_noisy}")
+        print(f"Average total noise added from Noisy Mech: {np.mean(num_noise)}")
+        print(f"Number of times no model was sampled PMixED: {num_non_sample}")
 
     print(f"Perplexity score of public model: {np.mean(pub_ppl_list):.2f}")
     print(f"Perplexity score of fine-tuned model: {np.mean(ft_ppl_list):.2f}")
     print(f"Perplexity score of DP-SGD: {np.mean(dpsgd_ppl_list):.2f}")
     print(f"Perplexity score of PMixED: {np.mean(ensemble_ppl_list):.2f}")
+    print(f"Average Privacy loss of PMixED: {np.mean(eps_list):.3f}")
+    print(f"Average number of times threshold not met PMixED: {np.mean(num_noisy_list):.2f}")

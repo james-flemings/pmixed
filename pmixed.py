@@ -14,7 +14,7 @@ class PMixED():
     def __init__(self, model_dirs, model_name, tokenizer,
                 device="cpu", q_budget=1024, alpha=2, delta=1e-5,
                 p=1.0, eps=0, beta=0., lambd=0, threshold=None, top_k=0,
-                sigma=0.0
+                sigma=0.0, accounting_method=None
     ):
         self.device = device
         self.model_name = model_name
@@ -25,7 +25,7 @@ class PMixED():
         self.p = p 
         self.delta = delta
         self.sigma = sigma
-        print("Sigma value", self.sigma)
+        self.accounting_method = accounting_method
         self.model_dirs = model_dirs
         self.num_ensemble = len(self.model_dirs)
         self.lambd = lambd
@@ -37,6 +37,8 @@ class PMixED():
         self.threshold = threshold
         self.top_k = top_k
         self.num_noisy = 0 
+        self.num_non_sample = 0
+        self.num_noise = [] 
         self.pub_model = AutoModelForCausalLM.from_pretrained(self.model_name,
                                                      pad_token_id=tokenizer.eos_token_id).to(
                                                      self.device)
@@ -57,7 +59,7 @@ class PMixED():
         '''
         return 1/(alpha-1) * np.log((1-p)**(alpha-1) * (1 + (alpha-1) * p) 
                                     + np.sum([comb(alpha, k) * (1-p)**(alpha-k) * p**k *
-                                              np.exp((k-1) * PMixED.privacy_loss(alpha=alpha, **kwargs))
+                                              np.exp((k-1) * PMixED.data_indep_loss(alpha=alpha, **kwargs))
                                                 for k in range(2, alpha+1)]
                                             )
                                         )
@@ -75,13 +77,25 @@ class PMixED():
         return (lambd / size)**2 * alpha / sigma**2 
 
     @staticmethod
-    def privacy_loss(alpha, size, beta=None, lambd=None, sigma=None):
+    def data_indep_loss(alpha, size, beta=None, lambd=None, sigma=None):
         eps = 0 
         if beta is not None:
             eps += PMixED.sample_privacy_loss(alpha, size, beta)
         if lambd is not None:
             eps += PMixED.noisy_privacy_loss(alpha, size, lambd, sigma)
         return eps
+    
+    @staticmethod
+    def data_dep_loss(mixed_dists, alpha, ret_idx=False):
+        max_loss = 0
+        idx = -1 
+        p = mixed_dists.mean(dim=0)
+        for i in range(mixed_dists.size()[0]):
+            p_i = torch.cat((mixed_dists[:i, :], mixed_dists[i+1:, :])).mean(dim=0)
+            eps = PMixED.RDSym(p, p_i, alpha)
+            max_loss = max(max_loss, eps)
+        return (max_loss, idx.pop()) if ret_idx else max_loss
+    
 
     @staticmethod
     def renyiDiv(p, q, alpha=float('inf')):
@@ -90,17 +104,22 @@ class PMixED():
         elif alpha == 1:
             RD = torch.sum(p*torch.log(p/q))
         else:
-            inds = torch.nonzero(q**(alpha-1))
-            RD = 1/(alpha-1)*torch.log(
-                torch.sum((p[inds]**alpha)/(q[inds]**(alpha-1))))
+            RD = 1/(alpha-1) * torch.log(
+                torch.sum((p/q)**(alpha)*q)
+            )
         if torch.isnan(RD):
             RD = torch.log(torch.max(p/q))
         return RD 
 
+    @staticmethod
+    def RDSym(p_mix, p_pub, alpha):
+        return  max(PMixED.renyiDiv(p_mix, p_pub, alpha=alpha),
+                   PMixED.renyiDiv(p_pub, p_mix, alpha=alpha)).item()
+
     def lambda_solver_bisection(self, p, p_pub):
         def f(lambd):
             pred = self.mix(p, p_pub, lambd)
-            eps = self.rd_mollification(pred, p_pub, self.alpha)
+            eps = PMixED.RDSym(pred, p_pub, self.alpha)
             return (eps - self.target)
         if f(1) <= 0.0:
             lambd = 1 
@@ -132,9 +151,13 @@ class PMixED():
         return np.random.choice(self.num_ensemble, np.random.binomial(self.num_ensemble, p))
 
     def priv_pred(self, output_dists):
-        sampled = self.poisson_subsample(self.p)
+        if self.accounting_method != "Dependent":
+            sampled = self.poisson_subsample(self.p)
+        else:
+            sampled = [i for i in range(len(output_dists))]
         if len(sampled) == 0:
             #self.lambda_history.append(0)
+            self.num_non_sample += 1
             self.priv_loss += self.subsample_eps(self.alpha,
                                             self.p,
                                             size=0,
@@ -153,6 +176,7 @@ class PMixED():
             (6) if (4) > T then return pub dist else return mix dist
             (7) Record self.priv_loss 
             '''
+             
             pub_logits = torch.log(output_dists[self.num_ensemble]).view(1, -1)
             pub_logits, idxs_remov = self.top_k_filtering(pub_logits, self.top_k)
 
@@ -164,19 +188,23 @@ class PMixED():
             trunc_pub_output_dist = F.softmax(pub_logits[-1, :], dim=-1)
             trunc_priv_output_dist = F.softmax(priv_logits[-1, :], dim=-1)
 
-            idx_noise = torch.nonzero(trunc_priv_output_dist, as_tuple=True)
+            idx_noise = torch.nonzero(trunc_priv_output_dist, as_tuple=True)[0]
             noise = torch.normal(0, self.sigma, size=(len(idx_noise), ))
             trunc_priv_output_dist[idx_noise] += noise
 
-            min_output_dist = torch.abs(torch.min(trunc_priv_output_dist))
-            norm_dp_output_dist = (trunc_priv_output_dist + min_output_dist) / (
-                                    trunc_priv_output_dist + min_output_dist).sum()
+            min_output_dist = torch.abs(torch.min(trunc_priv_output_dist[idx_noise]))
+            trunc_priv_output_dist[idx_noise] = (trunc_priv_output_dist[idx_noise]
+                                                 + min_output_dist) / (
+                                    trunc_priv_output_dist[idx_noise] + min_output_dist).sum()
+            idxs = torch.nonzero(trunc_priv_output_dist)
+            noisy_rd = PMixED.RDSym(trunc_priv_output_dist[idxs],
+                                  trunc_pub_output_dist[idxs],
+                                  self.alpha)
+            if abs(noisy_rd) != np.inf:
+                self.noisy_rd_history.append(noisy_rd) 
+                self.num_noise.append(noise.abs().sum())
 
-            noisy_rd = self.rd_mollification(norm_dp_output_dist,
-                                     trunc_pub_output_dist, self.alpha)
-            self.noisy_rd_history.append(noisy_rd) 
             if noisy_rd > self.threshold:
-                #print(f"Screening Mechanism invoked with {noisy_rd:.3f}")
                 self.num_noisy += 1
                 self.priv_loss += self.subsample_eps(self.alpha,
                                                self.p,
@@ -185,14 +213,9 @@ class PMixED():
                                                sigma=self.sigma
                                                )
                 return output_dists[self.num_ensemble] 
+             
             self.target = self.beta * self.alpha
-            self.priv_loss += self.subsample_eps(self.alpha,
-                                                 self.p,
-                                                 size=len(sampled),
-                                                 beta=self.beta,
-                                                 lambd=self.lambd,
-                                                 sigma=self.sigma
-                                                 )
+            self.noisy_rd_history.append(0)
 
         if self.threshold is None:
             self.target = self.beta_solver_bisection(len(sampled)) * self.alpha
@@ -203,23 +226,29 @@ class PMixED():
         self.lambda_history.append(np.mean([lambd for lambd in self.lambdas]))
         mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[lamb_i])
                        for lamb_i, i in enumerate(sampled)]
+
+        if self.accounting_method == "Independent":
+            self.priv_loss += self.subsample_eps(self.alpha,
+                                                 self.p,
+                                                 size=len(sampled),
+                                                 beta=self.beta,
+                                                 lambd=self.lambd,
+                                                 sigma=self.sigma
+                                                 )
+        elif self.accounting_method == "Dependent":
+            data_dep_loss = PMixED.data_dep_loss(mixed_dists, self.alpha)
+            data_indep_loss = PMixED.data_indep_loss(self.alpha,
+                                                     size=len(sampled),
+                                                     beta=self.beta)
+            loss = max(data_dep_loss, data_indep_loss)
+            self.priv_loss += loss + PMixED.data_indep_loss(self.alpha, 
+                                                            size=len(sampled),
+                                                            lambd=self.lambd,
+                                                            sigma=self.sigma
+                                                            )
+
         output_dist = torch.stack(mixed_dists).mean(dim=0)
         return output_dist
-
-    def data_dependent_loss(self, mixed_dists, alpha, ret_idx=False):
-        max_loss = 0
-        idx = -1 
-        p = mixed_dists.mean(dim=0)
-        for i in range(mixed_dists.size()[0]):
-            p_i = torch.cat((mixed_dists[:i, :], mixed_dists[i+1:, :])).mean(dim=0)
-            eps = max(self.renyiDiv(p, p_i, alpha=alpha),
-             self.renyiDiv(p_i, p, alpha=alpha))
-            max_loss = max(max_loss, eps)
-        return (max_loss, idx.pop()) if ret_idx else max_loss
-    
-    def rd_mollification(self, p_mix, p_pub, alpha):
-        return  max(self.renyiDiv(p_mix, p_pub, alpha=alpha),
-                   self.renyiDiv(p_pub, p_mix, alpha=alpha)).item()
 
     def mix(self, p, p_prime, lambd=0.5):
         return (lambd * p + (1-lambd) * p_prime)
@@ -262,5 +291,10 @@ class PMixED():
         x = [i for i in range(len(self.lambda_history))]
         plt.figure().set_figwidth(15)
         plt.plot(x, self.lambda_history)
+        plt.grid()
         plt.savefig(os.path.join("plts", "lambda_vals.png"))
         plt.clf()
+    
+    @staticmethod
+    def convert_to_aprox_dp(priv_loss, delta, alpha):
+        return priv_loss + np.log((alpha-1)/alpha) - (np.log(delta) + np.log(alpha))/(alpha-1)
