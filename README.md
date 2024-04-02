@@ -71,17 +71,17 @@ python prediction_experiments.py \
     --dataset=wikitext \
     --subset=wikitext-103-raw-v1 \
     --device=cuda:7 \
-    --accounting_method=Dependent \
+    --accounting_method=Independent \
     --seq_length=512 \
     --epsilon=8.0 \
     --query_budget=1024 \
-    --alpha=5 \
+    --alpha=4 \
     --delta=1e-5 \
     --p=0.03 \
     --sigma=1e-4 \
-    --lambd=1e-6 \
+    --lambd=1e-5 \
     --beta=0.04 \
-    --threshold=0.15 \
+    --threshold=0.125 \
     --top_k=60 \
-    --iters=1
+    --iters=8
 ```

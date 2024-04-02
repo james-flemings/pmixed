@@ -89,7 +89,8 @@ class PMixED():
     def data_dep_loss(mixed_dists, alpha, ret_idx=False):
         max_loss = 0
         idx = -1 
-        p = mixed_dists.mean(dim=0)
+        p = torch.stack(mixed_dists).mean(dim=0)
+        mixed_dists = torch.stack(mixed_dists)
         for i in range(mixed_dists.size()[0]):
             p_i = torch.cat((mixed_dists[:i, :], mixed_dists[i+1:, :])).mean(dim=0)
             eps = PMixED.RDSym(p, p_i, alpha)
@@ -105,7 +106,7 @@ class PMixED():
             RD = torch.sum(p*torch.log(p/q))
         else:
             RD = 1/(alpha-1) * torch.log(
-                torch.sum((p/q)**(alpha)*q)
+                torch.sum(((p/q)**(alpha))*q)
             )
         if torch.isnan(RD):
             RD = torch.log(torch.max(p/q))
@@ -124,14 +125,14 @@ class PMixED():
         if f(1) <= 0.0:
             lambd = 1 
         else:
-            lambd = bisect(f, 0, 1, maxiter=20, disp=False)
+            lambd = bisect(f, 0, 1, maxiter=5, disp=False)
         return lambd
     
     def beta_solver_bisection(self, size):
         def f(beta):
             sub_eps = self.subsample_eps(self.alpha, self.p, size=size, beta=beta)
             return (sub_eps - self.eps/self.q_budget)
-        return bisect(f, 0, 5, maxiter=20, disp=False)
+        return bisect(f, 0, 5, maxiter=5, disp=False)
 
     def pred_dist(self, context):
         output_dists = []
@@ -240,12 +241,13 @@ class PMixED():
             data_indep_loss = PMixED.data_indep_loss(self.alpha,
                                                      size=len(sampled),
                                                      beta=self.beta)
-            loss = max(data_dep_loss, data_indep_loss)
-            self.priv_loss += loss + PMixED.data_indep_loss(self.alpha, 
+            loss = min(data_dep_loss, data_indep_loss)
+            self.priv_loss += (loss + PMixED.data_indep_loss(self.alpha, 
                                                             size=len(sampled),
                                                             lambd=self.lambd,
                                                             sigma=self.sigma
                                                             )
+            )
 
         output_dist = torch.stack(mixed_dists).mean(dim=0)
         return output_dist
