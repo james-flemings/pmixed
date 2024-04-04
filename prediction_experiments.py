@@ -8,7 +8,7 @@ import os
 import argparse
 from pmixed import PMixED 
 from datasets import load_dataset
-from fine_tune_ensemble import group_texts, sample_level_tokenize_function
+from fine_tune_ensemble import group_text_preprocess
 from peft import PeftModel
 import copy
 import tqdm
@@ -68,10 +68,9 @@ def main(args):
     else:
         dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{args.dataset}.pt")).to(args.device)
  
-    seq_length = 512
     dataset = load_dataset(args.dataset, args.subset)
 
-    remove_columns = ["text"] 
+    '''
     tokenized_dataset = dataset['test'].map(sample_level_tokenize_function,
                                     fn_kwargs={"tokenizer": tokenizer},
                                     batched=True,
@@ -84,7 +83,18 @@ def main(args):
         batched=True,
         num_proc=4
     ) 
-
+    '''
+    label_column_names = None
+    preprocess_function = group_text_preprocess
+    test_data = dataset['test'].map(preprocess_function,
+                                    fn_kwargs={"tokenizer": tokenizer,
+                                               "block_size": args.seq_length,
+                                               "label_column_names": label_column_names},
+                                    batched=True,
+                                    num_proc=4,
+                                    desc="tokenizing dataset",
+                                    remove_columns=dataset['test'].column_names
+                                    )
     test_data.set_format(type="torch")
 
     pub_neg_log_likelihood = []
@@ -102,13 +112,14 @@ def main(args):
             pub_output_logits = pub_model(input_ids).logits 
             fine_tuned_output_logits =fine_tuned_model(input_ids).logits 
             dp_fine_tuned_output_logits = dp_fine_tuned_model(input_ids).logits 
-            output_dists = priv_ensemble.pred_dist(input_ids)
+            pub_dist, priv_dists = priv_ensemble.pred_dist(input_ids)
             ensemble_logits = []
 
             if k < args.query_budget:
-                for j in range(seq_length):
-                    token_softmax = [output_dist[j] for output_dist in output_dists]
-                    ensemble_output_dist = priv_ensemble.priv_pred(token_softmax)
+                for j in tqdm.tqdm(range(args.seq_length), desc="Privat Mixing"):
+                    priv_dists_token = [priv_dist[j] for priv_dist in priv_dists]
+                    pub_dist_token = pub_dist[j]
+                    ensemble_output_dist = priv_ensemble.priv_pred(pub_dist_token, priv_dists_token)
                     ensemble_logits.append(torch.log(ensemble_output_dist.cpu()))
                     k += 1
 

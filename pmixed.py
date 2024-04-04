@@ -125,24 +125,14 @@ class PMixED():
         if f(1) <= 0.0:
             lambd = 1 
         else:
-            lambd = bisect(f, 0, 1, maxiter=5, disp=False)
+            lambd = bisect(f, 0, 1, maxiter=10, disp=False)
         return lambd
     
     def beta_solver_bisection(self, size):
         def f(beta):
             sub_eps = self.subsample_eps(self.alpha, self.p, size=size, beta=beta)
             return (sub_eps - self.eps/self.q_budget)
-        return bisect(f, 0, 5, maxiter=5, disp=False)
-
-    def pred_dist(self, context):
-        output_dists = []
-        for i in range(self.num_ensemble):
-            self.lora_ensemble.set_adapter(f"lora-{i}")
-            logits = self.lora_ensemble(context).logits.squeeze().cpu()
-            output_dists.append(F.softmax(logits, dim=1))
-        logits = self.pub_model(context).logits.squeeze().cpu()
-        output_dists.append(F.softmax(logits, dim=1))
-        return output_dists 
+        return bisect(f, 0, 5, maxiter=20, disp=False)
 
     def poisson_subsample(self, p):
         '''
@@ -151,104 +141,134 @@ class PMixED():
         '''
         return np.random.choice(self.num_ensemble, np.random.binomial(self.num_ensemble, p))
 
-    def priv_pred(self, output_dists):
+    def lambda_eq(self, p, p_pub):
+        x = min(self.beta * self.alpha * (self.alpha-1) -
+                 (self.alpha-1) * PMixED.RDSym(p, p_pub, self.alpha),
+                 0)
+        return np.exp(x)
+
+    def noisy_screen(self, pub_dist, priv_dists):
+        '''
+        Noisy Screening Mechanism:
+        (1) Grab top-k entries V from public output distribution
+        (2) Grab V entries from mixed distribution
+        (3) Add noise to truncated mixed distribution
+        (4) Renormalize probability distribution
+        (5) Renyi Div between trunc mix dist and pub dist
+        (6) if (4) > T then return pub dist else return mix dist
+        (7) Record self.priv_loss 
+        '''
+        pub_logits = torch.log(pub_dist).view(1, -1)
+        pub_logits, idxs_remov = self.top_k_filtering(pub_logits, self.top_k)
+
+        mix_dists = torch.stack([self.mix(priv_dist, pub_dist, self.lambd)
+                                for priv_dist in priv_dists]).mean(dim=0)
+        priv_logits = torch.log(mix_dists).view(1, -1)
+        priv_logits[idxs_remov] = -float("Inf")
+
+        trunc_pub_output_dist = F.softmax(pub_logits[-1, :], dim=-1)
+        trunc_priv_output_dist = F.softmax(priv_logits[-1, :], dim=-1)
+
+        idx_noise = torch.nonzero(trunc_priv_output_dist, as_tuple=True)[0]
+        noise = torch.normal(0, self.sigma, size=(len(idx_noise), ))
+        trunc_priv_output_dist[idx_noise] += noise
+
+        min_output_dist = torch.abs(torch.min(trunc_priv_output_dist[idx_noise]))
+        trunc_priv_output_dist[idx_noise] = (trunc_priv_output_dist[idx_noise]
+                                                + min_output_dist) / (
+                                trunc_priv_output_dist[idx_noise] + min_output_dist).sum()
+        idxs = torch.nonzero(trunc_priv_output_dist)  
+        rd_noisy = PMixED.RDSym(trunc_priv_output_dist[idxs],
+                                  trunc_pub_output_dist[idxs],
+                                  self.alpha)      
+        return rd_noisy, noise
+
+    def update_privacy_loss(self, sample=False, mixed_dists=None, **kwargs):
+        '''
+        TODO: If noisy screening is not used, then don't account for it 
+        '''
+        loss = 0
+
+        if (not sample) and self.accounting_method == "Independent":
+            loss = self.subsample_eps(**kwargs) 
+        elif (not sample) and self.accounting_method == "Dependent":
+            loss = PMixED.noisy_privacy_loss(self.alpha,
+                                             size=kwargs['size'],
+                                             lambd=kwargs['lambd'],
+                                             sigma=kwargs['sigma'])
+        elif sample and self.accounting_method == "Independent":
+            loss = self.subsample_eps(**kwargs)
+        elif sample and self.accounting_method == "Dependent":
+            data_dep_loss = PMixED.data_dep_loss(mixed_dists, kwargs['alpha'])
+            data_indep_loss = PMixED.sample_privacy_loss(self.alpha,
+                                                     size=kwargs['size'],
+                                                     beta=kwargs['beta'])
+            loss = min(data_dep_loss, data_indep_loss) + PMixED.noisy_privacy_loss(self.alpha,
+                                                                                   size=kwargs['size'],
+                                                                                   lambd=kwargs['lambd'],
+                                                                                   sigma=kwargs['sigma'])
+        self.priv_loss += loss
+
+    def pred_dist(self, context):
+        priv_dists = []
+        for i in range(self.num_ensemble):
+            self.lora_ensemble.set_adapter(f"lora-{i}")
+            logits = self.lora_ensemble(context).logits.squeeze().cpu()
+            priv_dists.append(F.softmax(logits, dim=1))
+        logits = self.pub_model(context).logits.squeeze().cpu()
+        pub_dist = F.softmax(logits, dim=1)
+        return pub_dist, priv_dists
+
+    def priv_pred(self, pub_dist, priv_dists):
         if self.accounting_method != "Dependent":
             sampled = self.poisson_subsample(self.p)
         else:
-            sampled = [i for i in range(len(output_dists))]
+            sampled = [i for i in range(len(priv_dists))]
         if len(sampled) == 0:
-            #self.lambda_history.append(0)
             self.num_non_sample += 1
-            self.priv_loss += self.subsample_eps(self.alpha,
-                                            self.p,
-                                            size=0,
-                                            beta=self.beta
-                                            )
-            return output_dists[self.num_ensemble]
+            self.update_privacy_loss(sample=False,
+                                     alpha=self.alpha,
+                                     p=self.p,
+                                     size=0,
+                                     beta=self.beta,
+            )
+            return pub_dist 
 
         if self.threshold is not None:
-            '''
-            Noisy Screening Mechanism:
-            (1) Grab top-k entries V from public output distribution
-            (2) Grab V entries from mixed distribution
-            (3) Add noise to truncated mixed distribution
-            (4) Renormalize probability distribution
-            (5) Renyi Div between trunc mix dist and pub dist
-            (6) if (4) > T then return pub dist else return mix dist
-            (7) Record self.priv_loss 
-            '''
-             
-            pub_logits = torch.log(output_dists[self.num_ensemble]).view(1, -1)
-            pub_logits, idxs_remov = self.top_k_filtering(pub_logits, self.top_k)
-
-            mix_dists = torch.stack([self.mix(output_dist, output_dists[-1], self.lambd)
-                                  for output_dist in output_dists[:-1]]).mean(dim=0)
-            priv_logits = torch.log(mix_dists).view(1, -1)
-            priv_logits[idxs_remov] = -float("Inf")
-
-            trunc_pub_output_dist = F.softmax(pub_logits[-1, :], dim=-1)
-            trunc_priv_output_dist = F.softmax(priv_logits[-1, :], dim=-1)
-
-            idx_noise = torch.nonzero(trunc_priv_output_dist, as_tuple=True)[0]
-            noise = torch.normal(0, self.sigma, size=(len(idx_noise), ))
-            trunc_priv_output_dist[idx_noise] += noise
-
-            min_output_dist = torch.abs(torch.min(trunc_priv_output_dist[idx_noise]))
-            trunc_priv_output_dist[idx_noise] = (trunc_priv_output_dist[idx_noise]
-                                                 + min_output_dist) / (
-                                    trunc_priv_output_dist[idx_noise] + min_output_dist).sum()
-            idxs = torch.nonzero(trunc_priv_output_dist)
-            noisy_rd = PMixED.RDSym(trunc_priv_output_dist[idxs],
-                                  trunc_pub_output_dist[idxs],
-                                  self.alpha)
+            noisy_rd, noise = self.noisy_screen(pub_dist, priv_dists)
             if abs(noisy_rd) != np.inf:
                 self.noisy_rd_history.append(noisy_rd) 
                 self.num_noise.append(noise.abs().sum())
 
             if noisy_rd > self.threshold:
                 self.num_noisy += 1
-                self.priv_loss += self.subsample_eps(self.alpha,
-                                               self.p,
-                                               size=len(sampled),
-                                               lambd=self.lambd,
-                                               sigma=self.sigma
-                                               )
-                return output_dists[self.num_ensemble] 
+                self.update_privacy_loss(sample=False,
+                                         alpha=self.alpha,
+                                         p=self.p,
+                                         size=len(sampled),
+                                         lambd=self.lambd,
+                                         sigma=self.sigma
+                                         )
+                return pub_dist 
              
             self.target = self.beta * self.alpha
             self.noisy_rd_history.append(0)
 
-        if self.threshold is None:
+        if self.sigma == 0.0:
             self.target = self.beta_solver_bisection(len(sampled)) * self.alpha
 
-        self.lambdas = np.array([self.lambda_solver_bisection(output_dists[i],
-                                                output_dists[self.num_ensemble],
-                                                )for i in sampled])
+        self.lambdas = np.array([self.lambda_solver_bisection(priv_dists[i], pub_dist) for i in sampled])
         self.lambda_history.append(np.mean([lambd for lambd in self.lambdas]))
-        mixed_dists = [self.mix(output_dists[i], output_dists[self.num_ensemble], self.lambdas[lamb_i])
+        mixed_dists = [self.mix(priv_dists[i], pub_dist, self.lambdas[lamb_i])
                        for lamb_i, i in enumerate(sampled)]
-
-        if self.accounting_method == "Independent":
-            self.priv_loss += self.subsample_eps(self.alpha,
-                                                 self.p,
-                                                 size=len(sampled),
-                                                 beta=self.beta,
-                                                 lambd=self.lambd,
-                                                 sigma=self.sigma
-                                                 )
-        elif self.accounting_method == "Dependent":
-            data_dep_loss = PMixED.data_dep_loss(mixed_dists, self.alpha)
-            data_indep_loss = PMixED.data_indep_loss(self.alpha,
-                                                     size=len(sampled),
-                                                     beta=self.beta)
-            loss = min(data_dep_loss, data_indep_loss)
-            self.priv_loss += (loss + PMixED.data_indep_loss(self.alpha, 
-                                                            size=len(sampled),
-                                                            lambd=self.lambd,
-                                                            sigma=self.sigma
-                                                            )
-            )
-
+        self.update_privacy_loss(sample=True,
+                                 alpha=self.alpha,
+                                 p=self.p,
+                                 size=len(sampled),
+                                 beta=self.beta,
+                                 lambd=self.lambd,
+                                 sigma=self.sigma,
+                                 mixed_dists=mixed_dists)
         output_dist = torch.stack(mixed_dists).mean(dim=0)
         return output_dist
 

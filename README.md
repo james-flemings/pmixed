@@ -18,25 +18,25 @@ python3.10 -m pip install -r requirements.txt
 Fine-tuned models used in the paper can be accessed [here](https://drive.google.com/file/d/1v4Yp1AdofrXLqmb-ip4iXcYFHk9x_yt6/view?usp=drive_link). Be sure to untar the file in the root directory of this directory. However, if you decide to train the ensemble from scratch, then use the following command to reproduce our models:
 
 ```bash
-python -m torch.distributed.run --nproc_per_node=num_gpus fine_tune_ensemble.py \
+python -m torch.distributed.run --nproc_per_node=8 fine_tune_ensemble.py \
     --model_name=GPT2 \
-    --dataset=wikitext \
-    --subset=wikitext-103-raw-v1 \
+    --dataset=yelp \
+    --data_path=data/yelp_data \
     --num_ensemble=100 \
-    --epochs=15 \
+    --epochs=8 \
     --lora_r=4 \
     --lora_alpha=32 \
-    --lora_dropout=0.1 \
-    --block_size=512 \
-    --learning_rate=2e-4 \
+    --lora_dropout=0. \
+    --block_size=128 \
+    --learning_rate=4e-4 \
     --weight_decay=0.01 \
-    --batch_size=8 \
+    --batch_size=64 \
     --dp_batch_size=256 \
     --training_type=samp-agg \
     --max_grad_norm=1. \
     --epsilon=8. \
     --delta=1e-5 \
-    --num_gpus=num_gpus \
+    --num_gpus=8 \
     --num_proc=64
 ```
 
@@ -71,17 +71,17 @@ python prediction_experiments.py \
     --dataset=wikitext \
     --subset=wikitext-103-raw-v1 \
     --device=cuda:7 \
-    --accounting_method=Independent \
+    --accounting_method=Dependent \
     --seq_length=512 \
     --epsilon=8.0 \
     --query_budget=1024 \
-    --alpha=4 \
+    --alpha=18 \
     --delta=1e-5 \
     --p=0.03 \
-    --sigma=1e-4 \
-    --lambd=1e-5 \
-    --beta=0.04 \
-    --threshold=0.125 \
+    --sigma=1e-2 \
+    --lambd=1e-4 \
+    --beta=0.1 \
+    --threshold=4.5 \
     --top_k=60 \
-    --iters=8
+    --iters=1
 ```

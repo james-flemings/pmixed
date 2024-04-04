@@ -18,32 +18,63 @@ import argparse
 import tqdm
 
 START = 0 
+
+def sample_level_tokenize_function(examples, tokenizer):
+    return tokenizer(examples["text"])
+
+def author_level_tokenize_function(examples, tokenizer, block_size):
+    return tokenizer(examples["content"], padding="max_length", truncation=True, max_length=block_size)
+
+def group_text_preprocess(examples, tokenizer, block_size, label_column_names):
+    examples = tokenizer(examples['text'])
+    concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
+    total_length = len(concatenated_examples[list(examples.keys())[0]])
+    total_length = (total_length // block_size) * block_size
+    result = {
+        k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
+        for k, t in concatenated_examples.items()
+    }
+    result["labels"] = result["input_ids"].copy()
+    return result
+
+def indiv_text_preprocess(examples, tokenizer, block_size, label_column_names):
+    batch = []
+    for t in range(len(examples['text'])):
+        text = "\t".join([examples[name][t] for name in label_column_names]) + "\n\n" + examples['text'][t] + tokenizer.eos_token
+        batch.append(text)
+
+    result = tokenizer(batch, padding="max_length", truncation=True,
+                        max_length=block_size)
+    result["labels"] = result["input_ids"].copy()
+    return result
+
 def init_training(args):
     tokenizer = GPT2Tokenizer.from_pretrained(args.model_name)
+    num_added_toks = tokenizer.add_special_tokens({'pad_token': '[PAD]'})
     pretrained_model = GPT2LMHeadModel.from_pretrained(args.model_name,
                         pad_token_id=tokenizer.eos_token_id)
+    mean_tok_emb = pretrained_model.transformer.wte.weight.data.mean(dim=0)
+    pretrained_model.resize_token_embeddings(len(tokenizer))
     if args.subset == "None":
         args.subset = None
-    dataset = load_dataset(args.dataset, args.subset)
-    remove_columns = [c for c in dataset['train'].column_names if c != "author"] if args.dataset == 'reddit' \
-                        else ['text']
-
-    tokenize_function = author_level_tokenize_function if args.dataset == "reddit" \
-          else sample_level_tokenize_function
-          
-    tokenized_dataset = dataset.map(tokenize_function,
-                                    fn_kwargs={"tokenizer": tokenizer},
+    if args.dataset == "yelp":
+        data_path_train = os.path.join(args.data_path, "train.csv")
+        data_path_val = os.path.join(args.data_path, "val.csv")
+        dataset = load_dataset('csv', data_files={'train': data_path_train, 'validation': data_path_val})
+    else:
+        dataset = load_dataset(args.dataset, args.subset)
+    preprocess_function = indiv_text_preprocess if args.dataset == 'yelp' else group_text_preprocess
+    label_column_names = dataset.column_names['train']
+    tokenized_dataset = dataset.map(preprocess_function,
+                                    fn_kwargs={"tokenizer": tokenizer,
+                                               "block_size": args.block_size,
+                                               "label_column_names": label_column_names},
                                     batched=True,
                                     num_proc=args.num_proc,
-                                    remove_columns=remove_columns
+                                    desc="tokenizing dataset",
+                                    remove_columns=dataset.column_names['train']
                                     )
-    lm_dataset = tokenized_dataset.map(
-        group_texts,
-        fn_kwargs={"block_size": args.block_size},
-        batched=True,
-        num_proc=args.num_proc
-    ) 
-    return lm_dataset, tokenizer, pretrained_model
+    return tokenized_dataset, tokenizer, pretrained_model
 
 def train_ensemble(args, model_dir):
     lm_dataset, tokenizer, pretrained_model = init_training(args)
@@ -51,13 +82,13 @@ def train_ensemble(args, model_dir):
         lm_shards = {} 
         if args.num_ensemble == 1:
             lm_shards['train'] = lm_dataset['train']
-            if args.dataset == 'wikitext':
+            if args.dataset == 'wikitext' or args.dataset == 'yelp':
                 lm_shards['validation'] = lm_dataset['validation']
             else:
                 lm_shards['validation'] = None
         else:
             lm_shards['train'] = lm_dataset['train'].shard(num_shards=args.num_ensemble, index=i)
-            if args.dataset == 'wikitext':
+            if args.dataset == 'wikitext' or args.dataset == "yelp":
                 lm_shards['validation'] = lm_dataset['validation'].shard(num_shards=args.num_ensemble, index=i)
             else:
                 lm_shards['validation'] = None
@@ -92,8 +123,9 @@ def train_ensemble(args, model_dir):
             weight_decay=args.weight_decay,
             load_best_model_at_end=True,
             per_device_train_batch_size=args.batch_size,
-            lr_scheduler_type="linear",
-            warmup_steps=500,
+            #lr_scheduler_type="linear",
+            #warmup_steps=500,
+            label_names=['labels']
         )
         trainer = Trainer(
             model=lora_model,
@@ -105,24 +137,6 @@ def train_ensemble(args, model_dir):
         #eval_results = trainer.evaluate()
         #print(f"\n\nPerplexity: {math.exp(eval_results['eval_loss']):.2f}\n\n")
         trainer.save_model(output_dir)
-
-def sample_level_tokenize_function(examples, tokenizer):
-    return tokenizer(examples["text"])
-
-def author_level_tokenize_function(examples, tokenizer, block_size):
-    return tokenizer(examples["content"], padding="max_length", truncation=True, max_length=block_size)
-
-def group_texts(examples, block_size):
-    concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
-    total_length = len(concatenated_examples[list(examples.keys())[0]])
-    total_length = (total_length // block_size) * block_size
-    result = {
-        k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
-        for k, t in concatenated_examples.items()
-    }
-    result["labels"] = result["input_ids"].copy()
-    return result
-
 def create_author_mapping(dataset: Dataset, author: str):
     with dataset.formatted_as(type='pandas'):
         authors = pd.DataFrame(data={'author': dataset[author]})
@@ -254,7 +268,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="GPT2")
     parser.add_argument("--dataset", type=str, default="wikitext")
-    parser.add_argument("--subset", type=str, default="wikitext-103-raw-v1")
+    parser.add_argument("--subset", type=str, default=None)
+    parser.add_argument("--data_path", type=str, default=None)
     parser.add_argument("--num_ensemble", type=int, default=8)
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--lora_r", type=int, default=4)
