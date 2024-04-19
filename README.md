@@ -22,15 +22,15 @@ python -m torch.distributed.run --nproc_per_node=8 fine_tune_ensemble.py \
     --model_name=GPT2 \
     --dataset=yelp \
     --data_path=data/yelp_data \
-    --num_ensemble=100 \
-    --epochs=8 \
+    --num_ensemble=25 \
+    --epochs=6 \
     --lora_r=4 \
     --lora_alpha=32 \
     --lora_dropout=0. \
     --block_size=128 \
-    --learning_rate=4e-4 \
+    --learning_rate=8e-5 \
     --weight_decay=0.01 \
-    --batch_size=64 \
+    --batch_size=32 \
     --dp_batch_size=256 \
     --training_type=samp-agg \
     --max_grad_norm=1. \
@@ -66,22 +66,46 @@ And for the Ablation Study on the hyperparameters: ```python hyperparameter_expe
 To reproduce our comparison result, run the following command
 ```bash
 python prediction_experiments.py \
-    --num_ensemble=100 \
+    --num_ensemble=80 \
     --model_name=GPT2 \
-    --dataset=wikitext \
-    --subset=wikitext-103-raw-v1 \
+    --dataset=lm1b \
     --device=cuda:7 \
     --accounting_method=Dependent \
     --seq_length=512 \
     --epsilon=8.0 \
-    --query_budget=1024 \
+    --query_budget=9728 \
     --alpha=18 \
     --delta=1e-5 \
     --p=0.03 \
     --sigma=1e-2 \
     --lambd=1e-4 \
-    --beta=0.1 \
     --threshold=4.5 \
-    --top_k=60 \
+    --beta=0.2 \
+    --screen_top_k=60 \
     --iters=1
+```
+
+## Generate DP Synthetic Text 
+To reproduce our comparison result, run the following command
+```bash
+python generate_text.py \
+    --num_ensemble=25 \
+    --model_name=GPT2 \
+    --dataset=yelp \
+    --input_training_file data/yelp_data/train.csv \
+    --output_dir . \
+    --seq_length=64 \
+    --total_sequences 1000 \
+    --device=cuda:7 \
+    --accounting_method=Dependent \
+    --epsilon=8.0 \
+    --alpha=18 \
+    --delta=1e-5 \
+    --p=0.03 \
+    --sigma=1e-2 \
+    --lambd=1e-4 \
+    --threshold=4.0 \
+    --beta=0.2 \
+    --screen_top_k=60 \
+    --top_k=200
 ```

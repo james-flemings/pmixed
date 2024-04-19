@@ -9,15 +9,17 @@ import copy
 import matplotlib.pyplot as plt
 from scipy.optimize import bisect, brentq
 import os
+import tqdm
 
 class PMixED():
-    def __init__(self, model_dirs, model_name, tokenizer,
+    def __init__(self, model, model_dirs, model_name, tokenizer,
                 device="cpu", q_budget=1024, alpha=2, delta=1e-5,
-                p=1.0, eps=0, beta=0., lambd=0, threshold=None, top_k=0,
-                sigma=0.0, accounting_method=None
+                p=1.0, eps=0, beta=0., lambd=None, threshold=None, screen_top_k=0,
+                sigma=None, accounting_method=None
     ):
         self.device = device
         self.model_name = model_name
+        self.tokenizer = tokenizer
         self.q_budget = q_budget
         self.alpha = alpha 
         self.eps = eps
@@ -35,13 +37,11 @@ class PMixED():
         self.target = beta * self.alpha
         self.beta = beta
         self.threshold = threshold
-        self.top_k = top_k
+        self.screen_top_k = screen_top_k
         self.num_noisy = 0 
         self.num_non_sample = 0
         self.num_noise = [] 
-        self.pub_model = AutoModelForCausalLM.from_pretrained(self.model_name,
-                                                     pad_token_id=tokenizer.eos_token_id).to(
-                                                     self.device)
+        self.pub_model = model
         self.lora_ensemble = 0 
         for i, dir in enumerate(self.model_dirs):
             if i == 0:
@@ -88,14 +88,13 @@ class PMixED():
     @staticmethod
     def data_dep_loss(mixed_dists, alpha, ret_idx=False):
         max_loss = 0
-        idx = -1 
         p = torch.stack(mixed_dists).mean(dim=0)
         mixed_dists = torch.stack(mixed_dists)
         for i in range(mixed_dists.size()[0]):
             p_i = torch.cat((mixed_dists[:i, :], mixed_dists[i+1:, :])).mean(dim=0)
             eps = PMixED.RDSym(p, p_i, alpha)
             max_loss = max(max_loss, eps)
-        return (max_loss, idx.pop()) if ret_idx else max_loss
+        return max_loss
     
 
     @staticmethod
@@ -125,7 +124,7 @@ class PMixED():
         if f(1) <= 0.0:
             lambd = 1 
         else:
-            lambd = bisect(f, 0, 1, maxiter=10, disp=False)
+            lambd = bisect(f, 0, 1, maxiter=20, disp=False)
         return lambd
     
     def beta_solver_bisection(self, size):
@@ -159,7 +158,7 @@ class PMixED():
         (7) Record self.priv_loss 
         '''
         pub_logits = torch.log(pub_dist).view(1, -1)
-        pub_logits, idxs_remov = self.top_k_filtering(pub_logits, self.top_k)
+        pub_logits, idxs_remov = self.top_k_filtering(pub_logits, self.screen_top_k)
 
         mix_dists = torch.stack([self.mix(priv_dist, pub_dist, self.lambd)
                                 for priv_dist in priv_dists]).mean(dim=0)
@@ -209,7 +208,7 @@ class PMixED():
                                                                                    sigma=kwargs['sigma'])
         self.priv_loss += loss
 
-    def pred_dist(self, context):
+    def gen_output_dist(self, context):
         priv_dists = []
         for i in range(self.num_ensemble):
             self.lora_ensemble.set_adapter(f"lora-{i}")
@@ -219,7 +218,7 @@ class PMixED():
         pub_dist = F.softmax(logits, dim=1)
         return pub_dist, priv_dists
 
-    def priv_pred(self, pub_dist, priv_dists):
+    def gen_priv_output_dist(self, pub_dist, priv_dists):
         if self.accounting_method != "Dependent":
             sampled = self.poisson_subsample(self.p)
         else:
@@ -254,10 +253,14 @@ class PMixED():
             self.target = self.beta * self.alpha
             self.noisy_rd_history.append(0)
 
-        if self.sigma == 0.0:
-            self.target = self.beta_solver_bisection(len(sampled)) * self.alpha
+        if self.sigma is None:
+            self.beta = self.beta_solver_bisection(len(sampled))
+            self.target = self.beta * self.alpha
 
-        self.lambdas = np.array([self.lambda_solver_bisection(priv_dists[i], pub_dist) for i in sampled])
+        # In case top_k truncation was performed to avoid NaN
+        idxs = torch.nonzero(pub_dist)
+
+        self.lambdas = np.array([self.lambda_solver_bisection(priv_dists[i][idxs], pub_dist[idxs]) for i in sampled])
         self.lambda_history.append(np.mean([lambd for lambd in self.lambdas]))
         mixed_dists = [self.mix(priv_dists[i], pub_dist, self.lambdas[lamb_i])
                        for lamb_i, i in enumerate(sampled)]
@@ -271,6 +274,46 @@ class PMixED():
                                  mixed_dists=mixed_dists)
         output_dist = torch.stack(mixed_dists).mean(dim=0)
         return output_dist
+
+    def priv_generate(self, input_ids,
+                      max_length,
+                      top_k=None,
+                      ):
+        '''
+        TODO: Remove tokenizer usage here
+        '''
+        stop_tokens = ["<|endoftext|>", "[PAD]", " [PAD]"]
+        stop_tokens_id = {self.tokenizer(t)['input_ids'][-1] for t in stop_tokens}
+        generated_token_ids = input_ids.clone()
+        for _ in tqdm.tqdm(range(max_length), desc="Generating tokens"):
+            with torch.no_grad():
+                pub_dist, priv_dists = self.gen_output_dist(generated_token_ids)
+            next_token_id = 0
+            pub_dist = pub_dist[-1, :]
+            priv_dists = [priv_dist[-1, :] for priv_dist in priv_dists]
+
+            if top_k != None:
+                pub_logits = torch.log(pub_dist).view(1, -1)
+                pub_logits, idxs_remov = self.top_k_filtering(pub_logits, top_k)
+                output_dists = torch.stack(priv_dists).mean(dim=0)
+
+                priv_logits = []
+                for priv_dist in priv_dists:
+                    priv_logit = torch.log(priv_dist).view(1, -1)
+                    priv_logit[idxs_remov] = -float("Inf")
+                    priv_logits.append(priv_logit)
+
+                pub_dist = F.softmax(pub_logits, dim=-1)[-1, :]
+                priv_dists = [F.softmax(priv_logit, dim=-1)[-1, :] for priv_logit in priv_logits]
+
+            priv_output_dist = self.gen_priv_output_dist(pub_dist, priv_dists)
+            next_token_id = priv_output_dist.multinomial(1).long().to(self.device)
+            #print(f'Generated token "{self.tokenizer.decode(next_token_id)}"')
+            if next_token_id.cpu().item() in stop_tokens_id:
+                break
+            generated_token_ids = torch.cat([generated_token_ids, next_token_id], dim=0)
+            del next_token_id
+        return generated_token_ids
 
     def mix(self, p, p_prime, lambd=0.5):
         return (lambd * p + (1-lambd) * p_prime)

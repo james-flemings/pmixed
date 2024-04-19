@@ -1,7 +1,6 @@
 #!venv/bin/python
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
 import os 
@@ -12,19 +11,12 @@ from fine_tune_ensemble import group_text_preprocess
 from peft import PeftModel
 import copy
 import tqdm
-import matplotlib.pyplot as plt
-from scipy.optimize import bisect, minimize 
 import numpy as np
-import math
+
 
 def main(args):
-    #alpha = math.ceil(4 * np.log(1/args.delta) / (3*args.epsilon) + 1)
     alpha = args.alpha
     epsilon = args.epsilon - np.log((alpha-1)/alpha) + (np.log(args.delta) + np.log(alpha))/(alpha-1)
-    #print("Alpha", alpha)
-    #print("Epsilon", epsilon)
-    if args.subset == "None":
-        args.subset = None
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     pub_model = AutoModelForCausalLM.from_pretrained(args.model_name,
@@ -38,21 +30,23 @@ def main(args):
     else:
         model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-{args.subset}")
                     for i in range(args.num_ensemble)]
-    priv_ensemble = PMixED(model_paths,
-                             args.model_name,
-                             tokenizer,
-                             args.device,
-                             q_budget=args.query_budget,
-                             alpha=alpha,
-                             delta=args.delta,
-                             p=args.p,
-                             eps=epsilon,
-                             beta=args.beta,
-                             lambd=args.lambd,
-                             threshold=args.threshold,
-                             top_k=args.top_k,
-                             sigma=args.sigma,
-                             accounting_method=args.accounting_method
+    pub_model.eval()
+    priv_ensemble = PMixED(pub_model,
+                           model_paths,
+                           args.model_name,
+                           tokenizer,
+                           args.device,
+                           q_budget=args.query_budget,
+                           alpha=args.alpha,
+                           delta=args.delta,
+                           p=args.p,
+                           eps=epsilon,
+                           beta=args.beta,
+                           lambd=args.lambd,
+                           threshold=args.threshold,
+                           screen_top_k=args.screen_top_k,
+                           sigma=args.sigma,
+                           accounting_method=args.accounting_method
     )
     if args.subset == None:
         fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.dataset}")
@@ -70,20 +64,6 @@ def main(args):
  
     dataset = load_dataset(args.dataset, args.subset)
 
-    '''
-    tokenized_dataset = dataset['test'].map(sample_level_tokenize_function,
-                                    fn_kwargs={"tokenizer": tokenizer},
-                                    batched=True,
-                                    num_proc=4,
-                                    remove_columns=remove_columns
-                                    )
-    test_data = tokenized_dataset.map(
-        group_texts,
-        fn_kwargs={"block_size": seq_length},
-        batched=True,
-        num_proc=4
-    ) 
-    '''
     label_column_names = None
     preprocess_function = group_text_preprocess
     test_data = dataset['test'].map(preprocess_function,
@@ -105,28 +85,37 @@ def main(args):
     test_loader = DataLoader(test_data.select([i + args.start for i in range(args.start+step_size)]))#, shuffle=True)
     fine_tuned_model.eval()
     k = 0
-    for i, data in enumerate(test_loader):
+    for i, data in tqdm.tqdm(enumerate(test_loader), desc="Iterating through test data", total=len(test_loader)):
         labels = data['labels'].to(args.device)
         input_ids = data['input_ids'].to(args.device)
         with torch.no_grad():
             pub_output_logits = pub_model(input_ids).logits 
             fine_tuned_output_logits =fine_tuned_model(input_ids).logits 
             dp_fine_tuned_output_logits = dp_fine_tuned_model(input_ids).logits 
-            pub_dist, priv_dists = priv_ensemble.pred_dist(input_ids)
+            pub_dist, priv_dists = priv_ensemble.gen_output_dist(input_ids)
             ensemble_logits = []
 
             if k < args.query_budget:
-                for j in tqdm.tqdm(range(args.seq_length), desc="Privat Mixing"):
+                for j in range(args.seq_length):
                     priv_dists_token = [priv_dist[j] for priv_dist in priv_dists]
                     pub_dist_token = pub_dist[j]
-                    ensemble_output_dist = priv_ensemble.priv_pred(pub_dist_token, priv_dists_token)
+                    ensemble_output_dist = priv_ensemble.gen_priv_output_dist(pub_dist_token, priv_dists_token)
                     ensemble_logits.append(torch.log(ensemble_output_dist.cpu()))
                     k += 1
 
                 ensemble_logits = torch.stack(ensemble_logits)
                 ensemble_neg_log_likelihood.append(calc_loss(ensemble_logits, labels.cpu()))
             else:
+                priv_loss = PMixED.convert_to_aprox_dp(priv_loss=priv_ensemble.priv_loss,
+                                                       delta=args.delta,
+                                                       alpha=args.alpha)
+                print("Query budget exhausted")
+                print(f'Query budget: {k}; Privacy Loss: ε={priv_loss:.3f}\n\n')
                 break
+            priv_loss = PMixED.convert_to_aprox_dp(priv_loss=priv_ensemble.priv_loss,
+                                                    delta=args.delta,
+                                                    alpha=args.alpha)
+            print(f'Query budget: {k}; Privacy Loss: ε={priv_loss:.3f}\n\n')
 
         pub_neg_log_likelihood.append(calc_loss((pub_output_logits), labels))
         fine_tuned_neg_log_likelihood.append(calc_loss((fine_tuned_output_logits), labels))
@@ -137,15 +126,10 @@ def main(args):
     dp_fine_tuned_ppl = torch.exp(torch.stack(dp_fine_tuned_neg_log_likelihood))
     ensemble_ppl = torch.exp(torch.stack(ensemble_neg_log_likelihood))
 
-    #print(f"Perplexity score for Pre-Trained Model: {pre_trained_ppl.mean():.2f}")
-    #print(f"Perplexity score for Fine-Tuned Model: {fine_tuned_ppl.mean():.2f}")
-    #print(f"Perplexity score for DP-Fine-Tuned Model: {dp_fine_tuned_ppl.mean():.2f}")
-    #print(f"Perplexity score for Ensemble Private Prediction Model: {ensemble_ppl.mean():.2f}")
-
-    #priv_ensemble.print_priv_losses()
     priv_ensemble.print_lambdas()
-    priv_ensemble.print_noisy_rd()
     priv_ensemble.plot_lambdas()
+    if args.threshold is not None:
+        priv_ensemble.print_noisy_rd()
 
     return pre_trained_ppl.mean().cpu(), \
         fine_tuned_ppl.mean().cpu(), \
@@ -168,7 +152,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_ensemble", type=int, default=8)
     parser.add_argument("--model_name", type=str, default="GPT2")
     parser.add_argument("--dataset", type=str, default="wikitext")
-    parser.add_argument("--subset", type=str, default="wikitext-103-raw-v1")
+    parser.add_argument("--subset", type=str, default=None)
     parser.add_argument("--device", type=str, default="cuda:6")
     parser.add_argument("--accounting_method", type=str, default=None)
     parser.add_argument("--seq_length", type=int, default=512)
@@ -178,11 +162,11 @@ if __name__ == "__main__":
     parser.add_argument("--delta", type=float, default=1e-5)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--p", type=float, default=1.0)
-    parser.add_argument("--lambd", type=float, default=0.1)
+    parser.add_argument("--lambd", type=float, default=None)
     parser.add_argument("--beta", type=float, default=0.09)
     parser.add_argument("--threshold", type=float, default=None)
-    parser.add_argument("--sigma", type=float, default=0.3)
-    parser.add_argument("--top_k", type=int, default=100)
+    parser.add_argument("--sigma", type=float, default=None)
+    parser.add_argument("--screen_top_k", type=int, default=100)
     parser.add_argument("--iters", type=int, default=1)
     parser.add_argument("--start", type=int, default=0)
     args = parser.parse_args()

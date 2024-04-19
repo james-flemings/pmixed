@@ -8,6 +8,7 @@ from opacus.distributed import DifferentiallyPrivateDistributedDataParallel as D
 from opacus.utils.batch_memory_manager import BatchMemoryManager
 from opacus import PrivacyEngine
 import os
+import transformers
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, TrainingArguments, Trainer, set_seed
 from peft import LoraConfig, get_peft_model
 from datasets import load_dataset, Dataset
@@ -16,6 +17,7 @@ import numpy as np
 import pandas as pd
 import argparse
 import tqdm
+import math
 
 START = 0 
 
@@ -42,19 +44,24 @@ def indiv_text_preprocess(examples, tokenizer, block_size, label_column_names):
     for t in range(len(examples['text'])):
         text = "\t".join([examples[name][t] for name in label_column_names]) + "\n\n" + examples['text'][t] + tokenizer.eos_token
         batch.append(text)
-
+    #batch = examples['text']
     result = tokenizer(batch, padding="max_length", truncation=True,
                         max_length=block_size)
-    result["labels"] = result["input_ids"].copy()
+    #result["labels"] = result["input_ids"].copy()
     return result
 
 def init_training(args):
     tokenizer = GPT2Tokenizer.from_pretrained(args.model_name)
     num_added_toks = tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-    pretrained_model = GPT2LMHeadModel.from_pretrained(args.model_name,
-                        pad_token_id=tokenizer.eos_token_id)
+
+    # Load model
+    pretrained_model = GPT2LMHeadModel.from_pretrained(args.model_name)
     mean_tok_emb = pretrained_model.transformer.wte.weight.data.mean(dim=0)
     pretrained_model.resize_token_embeddings(len(tokenizer))
+    # Initialize the newly-added token embedding to the mean of all token embeddings
+    for i in range(num_added_toks):
+        pretrained_model.transformer.wte.weight.data[-(i + 1), :] = mean_tok_emb
+
     if args.subset == "None":
         args.subset = None
     if args.dataset == "yelp":
@@ -101,10 +108,7 @@ def train_ensemble(args, model_dir):
             task_type="CAUSAL_LM"
         )
         lora_model = get_peft_model(pretrained_model, lora_config)
-
-        #print(f"\n\nTraining Shard {i} of size {len(lm_shards['train'])}")
-        #print_trainable_parameters(lora_model)
-
+    
         output_dir = 0
         data = args.dataset if args.subset == None else args.subset
 
@@ -123,20 +127,29 @@ def train_ensemble(args, model_dir):
             weight_decay=args.weight_decay,
             load_best_model_at_end=True,
             per_device_train_batch_size=args.batch_size,
-            #lr_scheduler_type="linear",
+            lr_scheduler_type="constant",
             #warmup_steps=500,
-            label_names=['labels']
+            #label_names=['labels'],
+            logging_steps=20,
         )
+
         trainer = Trainer(
             model=lora_model,
             args=train_args,
             train_dataset=lm_shards['train'],
             eval_dataset=lm_shards['validation'],
+            data_collator=transformers.DataCollatorForLanguageModeling(tokenizer, mlm=False)
         )
-        trainer.train()
-        #eval_results = trainer.evaluate()
-        #print(f"\n\nPerplexity: {math.exp(eval_results['eval_loss']):.2f}\n\n")
-        trainer.save_model(output_dir)
+        try:
+            trainer.train()
+        finally:
+            eval_results = trainer.evaluate()
+        if train_args.local_rank == 0 or train_args.local_rank == -1:
+            print(f"\n\nTraining Shard {i} of size {len(lm_shards['train'])}")
+            print_trainable_parameters(lora_model)
+            print(f"\n\nPerplexity: {math.exp(eval_results['eval_loss']):.2f}\n\n")
+            trainer.save_model(output_dir)
+
 def create_author_mapping(dataset: Dataset, author: str):
     with dataset.formatted_as(type='pandas'):
         authors = pd.DataFrame(data={'author': dataset[author]})
