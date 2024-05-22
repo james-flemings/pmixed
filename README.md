@@ -66,46 +66,22 @@ And for the Ablation Study on the hyperparameters: ```python hyperparameter_expe
 To reproduce our comparison result, run the following command
 ```bash
 python prediction_experiments.py \
-    --num_ensemble=80 \
+    --num_ensemble=100 \
     --model_name=GPT2 \
-    --dataset=lm1b \
+    --dataset=wikitext \
+    --subset=wikitext-103-raw-v1 \
     --device=cuda:7 \
     --accounting_method=Dependent \
     --seq_length=512 \
     --epsilon=8.0 \
-    --query_budget=9728 \
+    --query_budget=1024 \
     --alpha=18 \
     --delta=1e-5 \
     --p=0.03 \
+    --threshold=4.5 \
     --sigma=1e-2 \
     --lambd=1e-4 \
-    --threshold=4.5 \
     --beta=0.2 \
     --screen_top_k=60 \
     --iters=1
-```
-
-## Generate DP Synthetic Text 
-To reproduce our comparison result, run the following command
-```bash
-python generate_text.py \
-    --num_ensemble=25 \
-    --model_name=GPT2 \
-    --dataset=yelp \
-    --input_training_file data/yelp_data/train.csv \
-    --output_dir . \
-    --seq_length=64 \
-    --total_sequences 1000 \
-    --device=cuda:7 \
-    --accounting_method=Dependent \
-    --epsilon=8.0 \
-    --alpha=18 \
-    --delta=1e-5 \
-    --p=0.03 \
-    --sigma=1e-2 \
-    --lambd=1e-4 \
-    --threshold=4.0 \
-    --beta=0.2 \
-    --screen_top_k=60 \
-    --top_k=200
 ```

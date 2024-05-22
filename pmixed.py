@@ -10,6 +10,9 @@ import matplotlib.pyplot as plt
 from scipy.optimize import bisect, brentq
 import os
 import tqdm
+import functools
+from itertools import combinations
+import multiprocessing as mp
 
 class PMixED():
     def __init__(self, model, model_dirs, model_name, tokenizer,
@@ -43,6 +46,8 @@ class PMixED():
         self.num_noise = [] 
         self.pub_model = model
         self.lora_ensemble = 0 
+        self.tau = 0.4 / self.alpha
+        self.ls_cum = np.zeros(self.num_ensemble-2) 
         for i, dir in enumerate(self.model_dirs):
             if i == 0:
                 self.lora_ensemble = PeftModel.from_pretrained(copy.deepcopy(
@@ -86,7 +91,8 @@ class PMixED():
         return eps
     
     @staticmethod
-    def data_dep_loss(mixed_dists, alpha, ret_idx=False):
+    @functools.cache
+    def data_dep_loss(mixed_dists, alpha, p_pub, ret_idx=False):
         max_loss = 0
         p = torch.stack(mixed_dists).mean(dim=0)
         mixed_dists = torch.stack(mixed_dists)
@@ -141,10 +147,15 @@ class PMixED():
         return np.random.choice(self.num_ensemble, np.random.binomial(self.num_ensemble, p))
 
     def lambda_eq(self, p, p_pub):
-        x = min(self.beta * self.alpha * (self.alpha-1) -
-                 (self.alpha-1) * PMixED.RDSym(p, p_pub, self.alpha),
-                 0)
-        return np.exp(x)
+        #x = min(self.beta * self.alpha * (self.alpha-1) -
+        #         (self.alpha-1) * PMixED.RDSym(p, p_pub, self.alpha),
+        #         0)
+        #return np.exp(x)
+        return min(
+            (np.exp(self.beta * self.alpha * (self.alpha-1)) - 1) / 
+            (np.exp((self.alpha-1) * PMixED.RDSym(p, p_pub, self.alpha)) - 1),
+            1.0
+        )
 
     def noisy_screen(self, pub_dist, priv_dists):
         '''
@@ -182,7 +193,7 @@ class PMixED():
                                   self.alpha)      
         return rd_noisy, noise
 
-    def update_privacy_loss(self, sample=False, mixed_dists=None, **kwargs):
+    def update_privacy_loss(self, sample=False, mixed_dists=None, p_pub=None, **kwargs):
         '''
         TODO: If noisy screening is not used, then don't account for it 
         '''
@@ -198,7 +209,7 @@ class PMixED():
         elif sample and self.accounting_method == "Independent":
             loss = self.subsample_eps(**kwargs)
         elif sample and self.accounting_method == "Dependent":
-            data_dep_loss = PMixED.data_dep_loss(mixed_dists, kwargs['alpha'])
+            data_dep_loss = PMixED.data_dep_loss(tuple(mixed_dists), kwargs['alpha'], p_pub)
             data_indep_loss = PMixED.sample_privacy_loss(self.alpha,
                                                      size=kwargs['size'],
                                                      beta=kwargs['beta'])
@@ -257,10 +268,8 @@ class PMixED():
             self.beta = self.beta_solver_bisection(len(sampled))
             self.target = self.beta * self.alpha
 
-        # In case top_k truncation was performed to avoid NaN
-        idxs = torch.nonzero(pub_dist)
-
-        self.lambdas = np.array([self.lambda_solver_bisection(priv_dists[i][idxs], pub_dist[idxs]) for i in sampled])
+        self.lambdas = np.array([self.lambda_solver_bisection(priv_dists[i], pub_dist) for i in sampled])
+        #self.lambdas = np.array([self.lambda_eq(priv_dists[i], pub_dist) for i in sampled])
         self.lambda_history.append(np.mean([lambd for lambd in self.lambdas]))
         mixed_dists = [self.mix(priv_dists[i], pub_dist, self.lambdas[lamb_i])
                        for lamb_i, i in enumerate(sampled)]
@@ -271,10 +280,66 @@ class PMixED():
                                  beta=self.beta,
                                  lambd=self.lambd,
                                  sigma=self.sigma,
-                                 mixed_dists=mixed_dists)
+                                 mixed_dists=mixed_dists,
+                                 p_pub=pub_dist)
         output_dist = torch.stack(mixed_dists).mean(dim=0)
+        #ls = self.fast_calc_ls(mixed_dists)
+        #self.ls_cum += ls
+        #self.ss = self.calc_ss(self.tau, self.ls_cum)
         return output_dist
 
+    def mix(self, p, p_prime, lambd=0.5):
+        return (lambd * p + (1-lambd) * p_prime)
+
+    def fast_calc_ls(self, mixed_dists):
+        max_ls = []
+        N = len(mixed_dists)
+        #avg_dists = torch.stack(mixed_dists).mean(dim=0)
+        #dist_eps_pair = [(dist, PMixED.RDSym(avg_dists, dist, self.alpha)) for dist in mixed_dists]
+        #dist_eps_pair.sort(key=lambda t: t[1])#, reverse=True)
+        dists = torch.stack(mixed_dists)
+
+        for d in range(0, N-2):
+            avg_dists = dists.mean(dim=0)
+            #dist_eps_pair = [(dist, PMixED.RDSym(avg_dists, dist, self.alpha)) for dist in dists]
+            dist_eps_pair = [(dists[i], PMixED.RDSym(avg_dists,
+                                                 torch.cat((dists[:i, :], 
+                                                            dists[i+1:, :])).mean(dim=0),
+                                                self.alpha))
+                                                for i in range(N-d)]
+
+            dist_eps_pair.sort(key=lambda t: t[1])#, reverse=True)
+            #eps = PMixED.data_dep_loss(tuple(dists), self.alpha)
+            eps = dist_eps_pair[-1][1]
+            #dist_prime = [val[0] for val in dist_eps_pair[:N-d-1]]
+            dist_prime = [val[0] for val in dist_eps_pair[:-1]]
+            eps_prime = PMixED.data_dep_loss(tuple(dist_prime), self.alpha)
+            ls = np.abs(eps-eps_prime)
+            max_ls.append(ls)
+
+            dists = torch.stack([val[0] for val in dist_eps_pair[1:]])
+        return np.array(max_ls)
+
+    def calc_ls(self, mixed_dists):
+        N = len(mixed_dists)
+        dist = mixed_dists
+        max_ls = [] 
+        for d in range(0, N-2):
+            n = len(dist)
+            dists_prime = combinations(dist, n-1)
+            eps = PMixED.data_dep_loss(tuple(dist), self.alpha) 
+            vals = [(dist_prime, PMixED.data_dep_loss(tuple(dist_prime), self.alpha)) for dist_prime in dists_prime]
+            eps_prime = min(vals, key = lambda t: t[1])[1]
+            dist = max(vals, key=lambda t: t[1])[0]
+            ls = (eps-eps_prime)**2
+            max_ls.append(ls)
+        return np.array(max_ls)
+    
+    def calc_ss(self, tau, ls_cum):
+        n = len(ls_cum)
+        factors = np.exp(-tau * np.arange(n))
+        return np.max(factors * ls_cum)
+    
     def priv_generate(self, input_ids,
                       max_length,
                       top_k=None,
@@ -314,9 +379,6 @@ class PMixED():
             generated_token_ids = torch.cat([generated_token_ids, next_token_id], dim=0)
             del next_token_id
         return generated_token_ids
-
-    def mix(self, p, p_prime, lambd=0.5):
-        return (lambd * p + (1-lambd) * p_prime)
 
     @staticmethod 
     def top_k_filtering(logits, top_k, filter_value=-float("Inf")):

@@ -96,12 +96,13 @@ def main(args):
             ensemble_logits = []
 
             if k < args.query_budget:
-                for j in range(args.seq_length):
+                for j in tqdm.tqdm(range(args.seq_length), desc="Mixing"):
                     priv_dists_token = [priv_dist[j] for priv_dist in priv_dists]
                     pub_dist_token = pub_dist[j]
                     ensemble_output_dist = priv_ensemble.gen_priv_output_dist(pub_dist_token, priv_dists_token)
                     ensemble_logits.append(torch.log(ensemble_output_dist.cpu()))
                     k += 1
+                    #print("Smooth Sensitivity", priv_ensemble.ss)
 
                 ensemble_logits = torch.stack(ensemble_logits)
                 ensemble_neg_log_likelihood.append(calc_loss(ensemble_logits, labels.cpu()))
