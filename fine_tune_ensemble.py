@@ -11,7 +11,7 @@ import os
 import transformers
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, TrainingArguments, Trainer, set_seed
 from peft import LoraConfig, get_peft_model
-from datasets import load_dataset, Dataset
+from datasets import load_dataset, Dataset, DatasetDict
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
@@ -19,7 +19,7 @@ import argparse
 import tqdm
 import math
 
-START = 0 
+START = 40 
 
 def sample_level_tokenize_function(examples, tokenizer):
     return tokenizer(examples["text"])
@@ -27,8 +27,8 @@ def sample_level_tokenize_function(examples, tokenizer):
 def author_level_tokenize_function(examples, tokenizer, block_size):
     return tokenizer(examples["content"], padding="max_length", truncation=True, max_length=block_size)
 
-def group_text_preprocess(examples, tokenizer, block_size, label_column_names):
-    examples = tokenizer(examples['text'])
+def group_text_preprocess(examples, tokenizer, block_size, header='text'):
+    examples = tokenizer(examples[header])
     concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
     total_length = len(concatenated_examples[list(examples.keys())[0]])
     total_length = (total_length // block_size) * block_size
@@ -38,6 +38,14 @@ def group_text_preprocess(examples, tokenizer, block_size, label_column_names):
     }
     result["labels"] = result["input_ids"].copy()
     return result
+
+def pubmed_preprocess(data_path):
+    train_dir = os.path.join(data_path, "train")
+    test_dir = os.path.join(data_path, "validation")
+    data_train_path = os.path.join(train_dir, "data-00000-of-00001.arrow")
+    data_test_path = os.path.join(test_dir, "data-00000-of-00001.arrow")
+    data_files = {"train": data_train_path, "test": data_test_path}
+    return load_dataset("arrow", data_files=data_files)
 
 def indiv_text_preprocess(examples, tokenizer, block_size, label_column_names):
     batch = []
@@ -62,24 +70,28 @@ def init_training(args):
     for i in range(num_added_toks):
         pretrained_model.transformer.wte.weight.data[-(i + 1), :] = mean_tok_emb
 
-    if args.subset == "None":
-        args.subset = None
     if args.dataset == "yelp":
         data_path_train = os.path.join(args.data_path, "train.csv")
         data_path_val = os.path.join(args.data_path, "val.csv")
         dataset = load_dataset('csv', data_files={'train': data_path_train, 'validation': data_path_val})
+    elif args.dataset == "pubmed":
+        dataset = pubmed_preprocess(args.data_path)
     else:
-        dataset = load_dataset(args.dataset, args.subset)
+        dataset_name = "ccdv/mediasum" if args.dataset == "mediasum" else args.dataset
+        dataset = load_dataset(dataset_name, args.subset)
+
     preprocess_function = indiv_text_preprocess if args.dataset == 'yelp' else group_text_preprocess
     label_column_names = dataset.column_names['train']
+    header = 'document' if args.dataset == "mediasum" else 'text'
+
     tokenized_dataset = dataset.map(preprocess_function,
                                     fn_kwargs={"tokenizer": tokenizer,
                                                "block_size": args.block_size,
-                                               "label_column_names": label_column_names},
+                                               "header": header},
                                     batched=True,
                                     num_proc=args.num_proc,
                                     desc="tokenizing dataset",
-                                    remove_columns=dataset.column_names['train']
+                                    remove_columns=label_column_names
                                     )
     return tokenized_dataset, tokenizer, pretrained_model
 
@@ -89,13 +101,13 @@ def train_ensemble(args, model_dir):
         lm_shards = {} 
         if args.num_ensemble == 1:
             lm_shards['train'] = lm_dataset['train']
-            if args.dataset == 'wikitext' or args.dataset == 'yelp':
+            if args.dataset == 'wikitext' or args.dataset == 'mediasum':
                 lm_shards['validation'] = lm_dataset['validation']
             else:
                 lm_shards['validation'] = None
         else:
             lm_shards['train'] = lm_dataset['train'].shard(num_shards=args.num_ensemble, index=i)
-            if args.dataset == 'wikitext' or args.dataset == "yelp":
+            if args.dataset == 'wikitext' or args.dataset == "mediasum":
                 lm_shards['validation'] = lm_dataset['validation'].shard(num_shards=args.num_ensemble, index=i)
             else:
                 lm_shards['validation'] = None
@@ -110,14 +122,14 @@ def train_ensemble(args, model_dir):
         lora_model = get_peft_model(pretrained_model, lora_config)
     
         output_dir = 0
-        data = args.dataset if args.subset == None else args.subset
+        data_name = args.dataset if args.subset == None else args.subset
 
         if args.num_ensemble == 1:
-            output_dir = os.path.join(model_dir, f"lora-{args.model_name}-finetuned-{data}")
+            output_dir = os.path.join(model_dir, f"lora-{args.model_name}-finetuned-{data_name}")
         else:
             output_dir = os.path.join(model_dir,
-                                    f"lora-{args.model_name}-{i}-finetuned-{data}")
-        eval_strat = 'no' if args.dataset == 'lm1b' else 'epoch'
+                                    f"lora-{args.model_name}-{i}-finetuned-{data_name}")
+        eval_strat = "epoch" if args.dataset == "wikitext" or args.dataset == "mediasum" else "no"
         train_args = TrainingArguments(
             output_dir=output_dir,
             evaluation_strategy=eval_strat,
@@ -127,7 +139,7 @@ def train_ensemble(args, model_dir):
             weight_decay=args.weight_decay,
             load_best_model_at_end=True,
             per_device_train_batch_size=args.batch_size,
-            lr_scheduler_type="constant",
+            lr_scheduler_type="linear",
             #warmup_steps=500,
             #label_names=['labels'],
             logging_steps=20,
@@ -143,11 +155,13 @@ def train_ensemble(args, model_dir):
         try:
             trainer.train()
         finally:
-            eval_results = trainer.evaluate()
+            if args.dataset == "wikitext":
+                eval_results = trainer.evaluate()
         if train_args.local_rank == 0 or train_args.local_rank == -1:
-            print(f"\n\nTraining Shard {i} of size {len(lm_shards['train'])}")
+            print(f"\n\nFinished Shard {i} of size {len(lm_shards['train'])}")
             print_trainable_parameters(lora_model)
-            print(f"\n\nPerplexity: {math.exp(eval_results['eval_loss']):.2f}\n\n")
+            if args.dataset == "wikitext":
+                print(f"\n\nPerplexity: {math.exp(eval_results['eval_loss']):.2f}\n\n")
             trainer.save_model(output_dir)
 
 def create_author_mapping(dataset: Dataset, author: str):
@@ -231,7 +245,9 @@ def dpsgd(rank, world_size, args, model_dir):
                     #f"Validation Loss: {np.mean(val_losses):.4f} | "
                     f"(ε = {epsilon:.2f})"
                 )
-            output_dir = os.path.join(model_dir, f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{args.dataset}.pt")
+            data_name = args.dataset if args.subset == None else args.subset
+
+            output_dir = os.path.join(model_dir, f"lora-{args.model_name}-{args.epsilon}-dp-finetuned-{data_name}.pt")
             torch.save(model._module, output_dir)
     cleanup()    
 
@@ -253,8 +269,8 @@ def evaluate(model, test_dataloader, device, criterion):
     return losses
 
 def setup(rank, world_size):
-    os.environ['MASTER_ADDR'] = '127.0.0.1'
-    os.environ['MASTER_PORT'] = '29500'
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
 
     # initialize the process group
     dist.init_process_group("gloo", rank=rank, world_size=world_size)

@@ -7,7 +7,7 @@ import os
 import argparse
 from pmixed import PMixED 
 from datasets import load_dataset
-from fine_tune_ensemble import group_text_preprocess
+from fine_tune_ensemble import group_text_preprocess, pubmed_preprocess
 from peft import PeftModel
 import copy
 import tqdm
@@ -24,12 +24,11 @@ def main(args):
                                                     args.device)
     model_dir = os.path.join("models", f"{args.num_ensemble}_ensemble")
     model_paths = None
-    if args.subset == None:
-        model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-{args.dataset}")
-                    for i in range(args.num_ensemble)]
-    else:
-        model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-{args.subset}")
-                    for i in range(args.num_ensemble)]
+    dataset_name = args.dataset if args.subset == None else args.subset
+    #dataset_name = "wikitext-103-raw-v1"
+    model_paths = [os.path.join(model_dir, f"lora-{args.model_name}-{i}-finetuned-{dataset_name}")
+                for i in range(args.num_ensemble)]
+
     pub_model.eval()
     priv_ensemble = PMixED(pub_model,
                            model_paths,
@@ -48,28 +47,26 @@ def main(args):
                            sigma=args.sigma,
                            accounting_method=args.accounting_method
     )
-    if args.subset == None:
-        fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.dataset}")
-    else:
-        fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{args.subset}")
+    #fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{dataset_name}")
+    fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-wikitext-103-raw-v1")
     fine_tuned_model = PeftModel.from_pretrained(copy.deepcopy(pub_model),
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
     dp_fine_tuned_model = 0
-    if args.subset == None:
-        dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{args.dataset}.pt")).to(args.device)
-    else:
-        dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{args.dataset}.pt")).to(args.device)
- 
-    dataset = load_dataset(args.dataset, args.subset)
+    dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{dataset_name}.pt")).to(args.device)
+    #dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-wikitext.pt")).to(args.device)
+    
+    dataset_name = "ccdv/mediasum" if args.dataset == "mediasum" else args.dataset
+    dataset = load_dataset(dataset_name, args.subset)
 
-    label_column_names = None
     preprocess_function = group_text_preprocess
+    header = 'document' if args.dataset == "mediasum" else 'text'
+
     test_data = dataset['test'].map(preprocess_function,
                                     fn_kwargs={"tokenizer": tokenizer,
                                                "block_size": args.seq_length,
-                                               "label_column_names": label_column_names},
+                                               "header": header},
                                     batched=True,
                                     num_proc=4,
                                     desc="tokenizing dataset",
@@ -154,6 +151,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_name", type=str, default="GPT2")
     parser.add_argument("--dataset", type=str, default="wikitext")
     parser.add_argument("--subset", type=str, default=None)
+    parser.add_argument("--data_path", type=str, default=None)
     parser.add_argument("--device", type=str, default="cuda:6")
     parser.add_argument("--accounting_method", type=str, default=None)
     parser.add_argument("--seq_length", type=int, default=512)
@@ -181,7 +179,7 @@ if __name__ == "__main__":
     num_noise_list = []
     step_size = args.query_budget // args.seq_length
     for i in tqdm.tqdm(range(0, args.iters), desc="Runs"):
-        args.start = i * step_size 
+        #args.start = i * step_size 
         pub_ppl, ft_ppl, dpsgd_ppl, ensemble_ppl, priv_loss, num_noisy, num_non_sample, num_noise = main(args)
         pub_ppl_list.append(pub_ppl)
         ft_ppl_list.append(ft_ppl)
@@ -200,5 +198,11 @@ if __name__ == "__main__":
     print(f"Perplexity score of fine-tuned model: {np.mean(ft_ppl_list):.2f}")
     print(f"Perplexity score of DP-SGD: {np.mean(dpsgd_ppl_list):.2f}")
     print(f"Perplexity score of PMixED: {np.mean(ensemble_ppl_list):.2f}")
+
+    print(f"STD Perplexity score of public model: {np.std(pub_ppl_list):.2f}")
+    print(f"STD Perplexity score of fine-tuned model: {np.std(ft_ppl_list):.2f}")
+    print(f"STD Perplexity score of DP-SGD: {np.std(dpsgd_ppl_list):.2f}")
+    print(f"STD Perplexity score of PMixED: {np.std(ensemble_ppl_list):.2f}")
+
     print(f"Average Privacy loss of PMixED: {np.mean(eps_list):.3f}")
     print(f"Average number of times threshold not met PMixED: {np.mean(num_noisy_list):.2f}")
