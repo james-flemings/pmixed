@@ -7,13 +7,14 @@ import os
 import argparse
 from pmixed import PMixED 
 from datasets import load_dataset
-from fine_tune_ensemble import group_text_preprocess, pubmed_preprocess
+from fine_tune_ensemble import group_text_preprocess, pubmed_preprocess, pubmedqa_preprocess
 from peft import PeftModel
 import copy
 import tqdm
 import numpy as np
 import gc
 
+torch.set_num_threads(1)
 
 def main(args):
     alpha = args.alpha
@@ -49,17 +50,25 @@ def main(args):
                            accounting_method=args.accounting_method
     )
     #fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{dataset_name}")
+    '''
     fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-wikitext-103-raw-v1")
     fine_tuned_model = PeftModel.from_pretrained(copy.deepcopy(pub_model),
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
+    '''
     dp_fine_tuned_model = 0
     dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{dataset_name}.pt")).to(args.device)
     #dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-wikitext.pt")).to(args.device)
-    
+    fine_tuned_model = dp_fine_tuned_model 
+
     dataset_name = "ccdv/mediasum" if args.dataset == "mediasum" else args.dataset
+    if dataset_name == "qiaojin/PubMedQA":
+        args.subset = "pqa_unlabeled"
     dataset = load_dataset(dataset_name, args.subset)
+
+    if args.dataset == "qiaojin/PubMedQA":
+        dataset = pubmedqa_preprocess(dataset['train'], 'test')
 
     preprocess_function = group_text_preprocess
     header = 'document' if args.dataset == "mediasum" else 'text'
@@ -104,8 +113,8 @@ def main(args):
                     k += 1
                     #priv_dists_token = [priv_dist.cpu() for priv_dist in priv_dists_token]
                     del ensemble_output_dist, priv_dists_token, pub_dist_token
-                    torch.cuda.empty_cache()
-                    gc.collect()
+                    #torch.cuda.empty_cache()
+                    #gc.collect()
                     #print("Smooth Sensitivity", priv_ensemble.ss)
 
                 ensemble_logits = torch.stack(ensemble_logits)
@@ -129,7 +138,6 @@ def main(args):
         dp_fine_tuned_neg_log_likelihood.append(calc_loss(dp_fine_tuned_output_logits, labels))
 
         del pub_output_logits, fine_tuned_output_logits, dp_fine_tuned_output_logits
-        torch.cuda.empty_cache()
 
     pre_trained_ppl = torch.exp(torch.stack(pub_neg_log_likelihood))
     fine_tuned_ppl = torch.exp(torch.stack(fine_tuned_neg_log_likelihood))

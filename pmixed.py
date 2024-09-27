@@ -103,7 +103,6 @@ class PMixED():
             max_loss = max(max_loss, eps)
             del p_i, eps
         del p
-        torch.cuda.empty_cache()
         return max_loss
 
     @staticmethod
@@ -123,8 +122,10 @@ class PMixED():
 
     @staticmethod
     def RDSym(p_mix, p_pub, alpha):
-        return  max(PMixED.renyiDiv(p_mix.type(torch.float64), p_pub.type(torch.float64), alpha=alpha).type(torch.float32),
-                   PMixED.renyiDiv(p_pub.type(torch.float64), p_mix.type(torch.float64), alpha=alpha).type(torch.float32)).item()
+        #return  max(PMixED.renyiDiv(p_mix.type(torch.float32), p_pub.type(torch.float32), alpha=alpha).type(torch.float32),
+        #           PMixED.renyiDiv(p_pub.type(torch.float32), p_mix.type(torch.float64), alpha=alpha).type(torch.float32)).item()
+        return  max(PMixED.renyiDiv(p_mix, p_pub, alpha=alpha),
+                   PMixED.renyiDiv(p_pub, p_mix, alpha=alpha)).item()
 
     def lambda_solver_bisection(self, p, p_pub):
         def f(lambd):
@@ -197,7 +198,6 @@ class PMixED():
                                   trunc_pub_output_dist[idxs],
                                   self.alpha)      
         del trunc_priv_output_dist, trunc_pub_output_dist, mix_dists, pub_logits, idxs_remov, priv_logits, min_output_dist, idxs, idx_noise
-        torch.cuda.empty_cache()
         return rd_noisy, noise
 
     def update_privacy_loss(self, sample=False, mixed_dists=None, p_pub=None, **kwargs):
@@ -224,7 +224,6 @@ class PMixED():
                     
         self.priv_loss += loss
         del loss
-        torch.cuda.empty_cache()
 
     def gen_output_dist(self, context):
         priv_dists = []
@@ -293,7 +292,6 @@ class PMixED():
                                  p_pub=pub_dist)
         output_dist = mixed_dists.mean(dim=0)
         del mixed_dists
-        torch.cuda.empty_cache()
         return output_dist
 
     def mix(self, p, p_prime, lambd=0.5):

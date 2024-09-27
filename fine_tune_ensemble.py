@@ -19,7 +19,7 @@ import argparse
 import tqdm
 import math
 
-START = 40 
+START = 0 
 
 def sample_level_tokenize_function(examples, tokenizer):
     return tokenizer(examples["text"])
@@ -46,6 +46,13 @@ def pubmed_preprocess(data_path):
     data_test_path = os.path.join(test_dir, "data-00000-of-00001.arrow")
     data_files = {"train": data_train_path, "test": data_test_path}
     return load_dataset("arrow", data_files=data_files)
+
+def pubmedqa_preprocess(dataset, header="train"):
+    data = {"text": []}
+    for i, row in enumerate(dataset):
+        context= ''.join(c for c in row['context']['contexts'])
+        data['text'].append(context)
+    return DatasetDict({header: Dataset.from_dict(data)})
 
 def indiv_text_preprocess(examples, tokenizer, block_size, label_column_names):
     batch = []
@@ -81,8 +88,10 @@ def init_training(args):
         dataset = load_dataset(dataset_name, args.subset)
 
     preprocess_function = indiv_text_preprocess if args.dataset == 'yelp' else group_text_preprocess
-    label_column_names = dataset.column_names['train']
     header = 'document' if args.dataset == "mediasum" else 'text'
+    if args.dataset == "qiaojin/PubMedQA":
+        dataset = pubmedqa_preprocess(dataset['train'])
+    label_column_names = dataset.column_names['train']
 
     tokenized_dataset = dataset.map(preprocess_function,
                                     fn_kwargs={"tokenizer": tokenizer,
