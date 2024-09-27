@@ -12,6 +12,7 @@ from peft import PeftModel
 import copy
 import tqdm
 import numpy as np
+import gc
 
 
 def main(args):
@@ -94,15 +95,23 @@ def main(args):
 
             if k < args.query_budget:
                 for j in tqdm.tqdm(range(args.seq_length), desc="Mixing"):
-                    priv_dists_token = [priv_dist[j] for priv_dist in priv_dists]
-                    pub_dist_token = pub_dist[j]
-                    ensemble_output_dist = priv_ensemble.gen_priv_output_dist(pub_dist_token, priv_dists_token)
+                    #priv_dists_token = [priv_dist[j].to(args.device) for priv_dist in priv_dists]
+                    priv_dists_token = torch.stack([priv_dist[j] for priv_dist in priv_dists])
+                    pub_dist_token = pub_dist[j]#.to(args.device)
+                    ensemble_output_dist = priv_ensemble.gen_priv_output_dist(pub_dist_token.to(args.device),
+                                                                               priv_dists_token.to(args.device))
                     ensemble_logits.append(torch.log(ensemble_output_dist.cpu()))
                     k += 1
+                    #priv_dists_token = [priv_dist.cpu() for priv_dist in priv_dists_token]
+                    del ensemble_output_dist, priv_dists_token, pub_dist_token
+                    torch.cuda.empty_cache()
+                    gc.collect()
                     #print("Smooth Sensitivity", priv_ensemble.ss)
 
                 ensemble_logits = torch.stack(ensemble_logits)
                 ensemble_neg_log_likelihood.append(calc_loss(ensemble_logits, labels.cpu()))
+                del ensemble_logits, priv_dists, pub_dist
+                torch.cuda.empty_cache()
             else:
                 priv_loss = PMixED.convert_to_aprox_dp(priv_loss=priv_ensemble.priv_loss,
                                                        delta=args.delta,
@@ -118,6 +127,9 @@ def main(args):
         pub_neg_log_likelihood.append(calc_loss((pub_output_logits), labels))
         fine_tuned_neg_log_likelihood.append(calc_loss((fine_tuned_output_logits), labels))
         dp_fine_tuned_neg_log_likelihood.append(calc_loss(dp_fine_tuned_output_logits, labels))
+
+        del pub_output_logits, fine_tuned_output_logits, dp_fine_tuned_output_logits
+        torch.cuda.empty_cache()
 
     pre_trained_ppl = torch.exp(torch.stack(pub_neg_log_likelihood))
     fine_tuned_ppl = torch.exp(torch.stack(fine_tuned_neg_log_likelihood))

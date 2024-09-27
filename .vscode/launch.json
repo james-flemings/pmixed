@@ -1,0 +1,36 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [ "--num_ensemble", "50",
+            "--model_name", "GPT2",
+            "--dataset", "mediasum",
+            "--device", "cuda:0",
+            "--accounting_method", "Dependent",
+            "--seq_length", "512", 
+            "--epsilon", "8.0",
+            "--query_budget", "1024",
+            "--alpha", "18",
+            "--lambd", "1e-4",
+            "--threshold", "4.5",
+            "--sigma", "1e-2", 
+            "--screen_top_k", "60",
+            "--delta", "1e-5",
+            "--p", "1.0",
+            "--beta", "0.2",
+            "--screen_top_k", "60",
+            "--iters", "1",
+            "--start", "0"
+        ]
+        }
+    ]
+}

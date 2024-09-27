@@ -55,16 +55,18 @@ class PMixED():
                                                              dir,
                                                              adapter_name=f"lora-{i}"
                                                             ).to(self.device)
+                self.lora_ensemble.eval()
             else:
                 self.lora_ensemble.load_adapter(dir, adapter_name=f"lora-{i}")
+                self.lora_ensemble.eval()
     @staticmethod 
     def subsample_eps(alpha, p, **kwargs):
         '''
         Make priv loss a parameter 
         '''
-        return 1/(alpha-1) * np.log((1-p)**(alpha-1) * (1 + (alpha-1) * p) 
-                                    + np.sum([comb(alpha, k) * (1-p)**(alpha-k) * p**k *
-                                              np.exp((k-1) * PMixED.data_indep_loss(alpha=alpha, **kwargs))
+        return 1/(alpha-1) * torch.log((1-p)**(alpha-1) * (1 + (alpha-1) * p) 
+                                    + torch.sum([comb(alpha, k) * (1-p)**(alpha-k) * p**k *
+                                              torch.exp((k-1) * PMixED.data_indep_loss(alpha=alpha, **kwargs))
                                                 for k in range(2, alpha+1)]
                                             )
                                         )
@@ -92,16 +94,17 @@ class PMixED():
     
     @staticmethod
     @functools.cache
-    def data_dep_loss(mixed_dists, alpha, p_pub, ret_idx=False):
+    def data_dep_loss(mixed_dists, alpha, device="cpu"):
         max_loss = 0
-        p = torch.stack(mixed_dists).mean(dim=0)
-        mixed_dists = torch.stack(mixed_dists)
+        p = mixed_dists.mean(dim=0).to(device)
         for i in range(mixed_dists.size()[0]):
-            p_i = torch.cat((mixed_dists[:i, :], mixed_dists[i+1:, :])).mean(dim=0)
+            p_i = torch.cat((mixed_dists[:i, :], mixed_dists[i+1:, :])).to(device).mean(dim=0)
             eps = PMixED.RDSym(p, p_i, alpha)
             max_loss = max(max_loss, eps)
+            del p_i, eps
+        del p
+        torch.cuda.empty_cache()
         return max_loss
-    
 
     @staticmethod
     def renyiDiv(p, q, alpha=float('inf')):
@@ -114,18 +117,20 @@ class PMixED():
                 torch.sum(((p/q)**(alpha))*q)
             )
         if torch.isnan(RD):
+            del RD
             RD = torch.log(torch.max(p/q))
         return RD 
 
     @staticmethod
     def RDSym(p_mix, p_pub, alpha):
-        return  max(PMixED.renyiDiv(p_mix, p_pub, alpha=alpha),
-                   PMixED.renyiDiv(p_pub, p_mix, alpha=alpha)).item()
+        return  max(PMixED.renyiDiv(p_mix.type(torch.float64), p_pub.type(torch.float64), alpha=alpha).type(torch.float32),
+                   PMixED.renyiDiv(p_pub.type(torch.float64), p_mix.type(torch.float64), alpha=alpha).type(torch.float32)).item()
 
     def lambda_solver_bisection(self, p, p_pub):
         def f(lambd):
             pred = self.mix(p, p_pub, lambd)
             eps = PMixED.RDSym(pred, p_pub, self.alpha)
+            del pred
             return (eps - self.target)
         if f(1) <= 0.0:
             lambd = 1 
@@ -181,7 +186,7 @@ class PMixED():
 
         idx_noise = torch.nonzero(trunc_priv_output_dist, as_tuple=True)[0]
         noise = torch.normal(0, self.sigma, size=(len(idx_noise), ))
-        trunc_priv_output_dist[idx_noise] += noise
+        trunc_priv_output_dist[idx_noise] += noise.to(self.device)
 
         min_output_dist = torch.abs(torch.min(trunc_priv_output_dist[idx_noise]))
         trunc_priv_output_dist[idx_noise] = (trunc_priv_output_dist[idx_noise]
@@ -191,6 +196,8 @@ class PMixED():
         rd_noisy = PMixED.RDSym(trunc_priv_output_dist[idxs],
                                   trunc_pub_output_dist[idxs],
                                   self.alpha)      
+        del trunc_priv_output_dist, trunc_pub_output_dist, mix_dists, pub_logits, idxs_remov, priv_logits, min_output_dist, idxs, idx_noise
+        torch.cuda.empty_cache()
         return rd_noisy, noise
 
     def update_privacy_loss(self, sample=False, mixed_dists=None, p_pub=None, **kwargs):
@@ -209,15 +216,15 @@ class PMixED():
         elif sample and self.accounting_method == "Independent":
             loss = self.subsample_eps(**kwargs)
         elif sample and self.accounting_method == "Dependent":
-            data_dep_loss = PMixED.data_dep_loss(tuple(mixed_dists), kwargs['alpha'], p_pub)
-            data_indep_loss = PMixED.sample_privacy_loss(self.alpha,
-                                                     size=kwargs['size'],
-                                                     beta=kwargs['beta'])
-            loss = min(data_dep_loss, data_indep_loss) + PMixED.noisy_privacy_loss(self.alpha,
-                                                                                   size=kwargs['size'],
-                                                                                   lambd=kwargs['lambd'],
-                                                                                   sigma=kwargs['sigma'])
+            data_dep_loss = PMixED.data_dep_loss(mixed_dists, kwargs['alpha'], self.device)
+            loss = data_dep_loss + PMixED.noisy_privacy_loss(self.alpha,
+                                                            size=kwargs['size'],
+                                                            lambd=kwargs['lambd'],
+                                                            sigma=kwargs['sigma'])
+                    
         self.priv_loss += loss
+        del loss
+        torch.cuda.empty_cache()
 
     def gen_output_dist(self, context):
         priv_dists = []
@@ -268,11 +275,13 @@ class PMixED():
             self.beta = self.beta_solver_bisection(len(sampled))
             self.target = self.beta * self.alpha
 
-        self.lambdas = np.array([self.lambda_solver_bisection(priv_dists[i], pub_dist) for i in sampled])
+        self.lambdas = np.array([self.lambda_solver_bisection(priv_dists[i],
+                                                               pub_dist) for i in sampled])
         #self.lambdas = np.array([self.lambda_eq(priv_dists[i], pub_dist) for i in sampled])
         self.lambda_history.append(np.mean([lambd for lambd in self.lambdas]))
-        mixed_dists = [self.mix(priv_dists[i], pub_dist, self.lambdas[lamb_i])
-                       for lamb_i, i in enumerate(sampled)]
+        mixed_dists = torch.stack([self.mix(priv_dists[i], pub_dist,
+                                 self.lambdas[lamb_i]).cpu()
+                       for lamb_i, i in enumerate(sampled)])
         self.update_privacy_loss(sample=True,
                                  alpha=self.alpha,
                                  p=self.p,
@@ -282,10 +291,9 @@ class PMixED():
                                  sigma=self.sigma,
                                  mixed_dists=mixed_dists,
                                  p_pub=pub_dist)
-        output_dist = torch.stack(mixed_dists).mean(dim=0)
-        #ls = self.fast_calc_ls(mixed_dists)
-        #self.ls_cum += ls
-        #self.ss = self.calc_ss(self.tau, self.ls_cum)
+        output_dist = mixed_dists.mean(dim=0)
+        del mixed_dists
+        torch.cuda.empty_cache()
         return output_dist
 
     def mix(self, p, p_prime, lambd=0.5):
