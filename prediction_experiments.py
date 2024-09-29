@@ -7,14 +7,16 @@ import os
 import argparse
 from pmixed import PMixED 
 from datasets import load_dataset
-from fine_tune_ensemble import group_text_preprocess, pubmed_preprocess, pubmedqa_preprocess
+from fine_tune_ensemble import group_text_preprocess, pubmed_preprocess, pubmedqa_preprocess, air_dialogue_preprocess
 from peft import PeftModel
 import copy
 import tqdm
 import numpy as np
 import gc
+from transformers.utils import logging
+logging.set_verbosity(40)
 
-torch.set_num_threads(1)
+torch.set_num_threads(5)
 
 def main(args):
     alpha = args.alpha
@@ -49,29 +51,40 @@ def main(args):
                            sigma=args.sigma,
                            accounting_method=args.accounting_method
     )
-    #fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-{dataset_name}")
-    '''
-    fine_tuned_model_dir = os.path.join("models", f"lora-{args.model_name}-finetuned-wikitext-103-raw-v1")
+    #fine_tuned_model_dir = os.path.join("models/80_ensemble", f"lora-{args.model_name}-0-finetuned-{args.dataset}")
+    fine_tuned_model_dir = os.path.join("models/100_ensemble", f"lora-{args.model_name}-0-finetuned-document")
     fine_tuned_model = PeftModel.from_pretrained(copy.deepcopy(pub_model),
                                                  fine_tuned_model_dir,
                                                  pad_token_id=tokenizer.eos_token_id).to(
                                                  args.device)
-    '''
     dp_fine_tuned_model = 0
     dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-{dataset_name}.pt")).to(args.device)
-    #dp_fine_tuned_model = torch.load(os.path.join("models", f"lora-{args.model_name}-8.0-dp-finetuned-wikitext.pt")).to(args.device)
-    fine_tuned_model = dp_fine_tuned_model 
 
-    dataset_name = "ccdv/mediasum" if args.dataset == "mediasum" else args.dataset
+    match args.dataset:
+        case "mediasum":
+            header = 'document'
+            dataset_name = 'ccdv/mediasum'
+            split = None
+        case "pubmed-summarization":
+            header = 'article'
+            dataset_name = "ccdv/pubmed-summarization"
+            #split = 'validation[:100%]+train[:50%]'
+            split=None
+        case _:
+            header = 'text'
+            dataset_name = args.datset
+            split = None
+
     if dataset_name == "qiaojin/PubMedQA":
         args.subset = "pqa_unlabeled"
-    dataset = load_dataset(dataset_name, args.subset)
+    dataset = load_dataset(dataset_name, args.subset, split=split)
 
     if args.dataset == "qiaojin/PubMedQA":
         dataset = pubmedqa_preprocess(dataset['train'], 'test')
+    elif args.dataset == "air_dialogue":
+        dataset = air_dialogue_preprocess(args.data_path, 'test')
 
     preprocess_function = group_text_preprocess
-    header = 'document' if args.dataset == "mediasum" else 'text'
 
     test_data = dataset['test'].map(preprocess_function,
                                     fn_kwargs={"tokenizer": tokenizer,
@@ -137,6 +150,24 @@ def main(args):
         fine_tuned_neg_log_likelihood.append(calc_loss((fine_tuned_output_logits), labels))
         dp_fine_tuned_neg_log_likelihood.append(calc_loss(dp_fine_tuned_output_logits, labels))
 
+        pre_trained_ppl = torch.exp(torch.stack(pub_neg_log_likelihood))
+        fine_tuned_ppl = torch.exp(torch.stack(fine_tuned_neg_log_likelihood))
+        dp_fine_tuned_ppl = torch.exp(torch.stack(dp_fine_tuned_neg_log_likelihood))
+        ensemble_ppl = torch.exp(torch.stack(ensemble_neg_log_likelihood))
+
+        priv_ensemble.print_lambdas()
+        priv_ensemble.plot_lambdas()
+
+        if args.threshold is not None:
+            priv_ensemble.print_noisy_rd()
+
+        print(f'Query budget: {k}; Privacy Loss: ε={priv_loss:.3f}\n\n')
+        print(f"Number of times used Noisy Mechanism PMixED: {priv_ensemble.num_noisy}")
+        print(f"Perplexity score of public model: {pre_trained_ppl.mean().item():.2f}")
+        print(f"Perplexity score of fine-tuned model: {fine_tuned_ppl.mean().item():.2f}")
+        print(f"Perplexity score of DP-SGD: {dp_fine_tuned_ppl.mean().item():.2f}")
+        print(f"Perplexity score of PMixED: {ensemble_ppl.mean().item():.2f}")
+
         del pub_output_logits, fine_tuned_output_logits, dp_fine_tuned_output_logits
 
     pre_trained_ppl = torch.exp(torch.stack(pub_neg_log_likelihood))
@@ -144,8 +175,6 @@ def main(args):
     dp_fine_tuned_ppl = torch.exp(torch.stack(dp_fine_tuned_neg_log_likelihood))
     ensemble_ppl = torch.exp(torch.stack(ensemble_neg_log_likelihood))
 
-    priv_ensemble.print_lambdas()
-    priv_ensemble.plot_lambdas()
     if args.threshold is not None:
         priv_ensemble.print_noisy_rd()
 

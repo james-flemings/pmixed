@@ -39,6 +39,36 @@ def group_text_preprocess(examples, tokenizer, block_size, header='text'):
     result["labels"] = result["input_ids"].copy()
     return result
 
+def air_dialogue_preprocess(data_path, header='train'):
+    train_path = os.path.join(data_path, "train_data.json")
+    val_path = os.path.join(data_path, "dev_data.json")
+    test_path = os.path.join(data_path, "test_data.json")
+    if header == 'train':
+        data_files = {"train": train_path, "validation": val_path}
+    else:
+        data_files = {'test': test_path}
+    dataset = load_dataset("json", data_files=data_files)
+    train_data = {"text": []}
+    val_data = {"text": []}
+    test_data = {"text": []}
+
+    if header == 'train':
+        for i, row in enumerate(dataset['train']):
+            context = ' '.join(c for c in row['dialogue'])
+            train_data['text'].append(context)
+        for i, row in enumerate(dataset['validation']):
+            context = ' '.join(c for c in row['dialogue'])
+            val_data['text'].append(context)
+    else:
+        for i, row in enumerate(dataset['test']):
+            context = ' '.join(c for c in row['dialogue'])
+            test_data['text'].append(context)
+
+    return DatasetDict({"train": Dataset.from_dict(train_data),
+                    "validation": Dataset.from_dict(val_data),
+                    "test": Dataset.from_dict(test_data)
+                    })        
+
 def pubmed_preprocess(data_path):
     train_dir = os.path.join(data_path, "train")
     test_dir = os.path.join(data_path, "validation")
@@ -77,18 +107,30 @@ def init_training(args):
     for i in range(num_added_toks):
         pretrained_model.transformer.wte.weight.data[-(i + 1), :] = mean_tok_emb
 
+    match args.dataset:
+        case "mediasum":
+            header = 'document'
+            dataset_name = 'ccdv/mediasum'
+        case "pubmed-summarization":
+            header = 'article'
+            dataset_name = "ccdv/pubmed-summarization"
+        case _:
+            header = 'text'
+            dataset_name = args.datset
+
     if args.dataset == "yelp":
         data_path_train = os.path.join(args.data_path, "train.csv")
         data_path_val = os.path.join(args.data_path, "val.csv")
         dataset = load_dataset('csv', data_files={'train': data_path_train, 'validation': data_path_val})
     elif args.dataset == "pubmed":
         dataset = pubmed_preprocess(args.data_path)
+    elif args.dataset == "air_dialogue":
+        dataset = air_dialogue_preprocess(args.data_path)
     else:
-        dataset_name = "ccdv/mediasum" if args.dataset == "mediasum" else args.dataset
         dataset = load_dataset(dataset_name, args.subset)
 
     preprocess_function = indiv_text_preprocess if args.dataset == 'yelp' else group_text_preprocess
-    header = 'document' if args.dataset == "mediasum" else 'text'
+
     if args.dataset == "qiaojin/PubMedQA":
         dataset = pubmedqa_preprocess(dataset['train'])
     label_column_names = dataset.column_names['train']
@@ -110,13 +152,13 @@ def train_ensemble(args, model_dir):
         lm_shards = {} 
         if args.num_ensemble == 1:
             lm_shards['train'] = lm_dataset['train']
-            if args.dataset == 'wikitext' or args.dataset == 'mediasum':
+            if args.dataset == 'wikitext' or args.dataset == 'mediasum' or args.dataset == "air_dialogue":
                 lm_shards['validation'] = lm_dataset['validation']
             else:
                 lm_shards['validation'] = None
         else:
             lm_shards['train'] = lm_dataset['train'].shard(num_shards=args.num_ensemble, index=i)
-            if args.dataset == 'wikitext' or args.dataset == "mediasum":
+            if args.dataset == 'wikitext' or args.dataset == "mediasum" or args.dataset == "air_dialogue":
                 lm_shards['validation'] = lm_dataset['validation'].shard(num_shards=args.num_ensemble, index=i)
             else:
                 lm_shards['validation'] = None
@@ -131,14 +173,15 @@ def train_ensemble(args, model_dir):
         lora_model = get_peft_model(pretrained_model, lora_config)
     
         output_dir = 0
-        data_name = args.dataset if args.subset == None else args.subset
+        #data_name = args.dataset if args.subset == None else args.subset
+        data_name = args.dataset
 
         if args.num_ensemble == 1:
             output_dir = os.path.join(model_dir, f"lora-{args.model_name}-finetuned-{data_name}")
         else:
             output_dir = os.path.join(model_dir,
                                     f"lora-{args.model_name}-{i}-finetuned-{data_name}")
-        eval_strat = "epoch" if args.dataset == "wikitext" or args.dataset == "mediasum" else "no"
+        eval_strat = 'no' if lm_shards['validation'] == None else "epoch"
         train_args = TrainingArguments(
             output_dir=output_dir,
             evaluation_strategy=eval_strat,
@@ -148,10 +191,11 @@ def train_ensemble(args, model_dir):
             weight_decay=args.weight_decay,
             load_best_model_at_end=True,
             per_device_train_batch_size=args.batch_size,
-            lr_scheduler_type="linear",
+            lr_scheduler_type="constant",
             #warmup_steps=500,
             #label_names=['labels'],
             logging_steps=20,
+            disable_tqdm=False,
         )
 
         trainer = Trainer(

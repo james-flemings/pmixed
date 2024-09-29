@@ -122,10 +122,10 @@ class PMixED():
 
     @staticmethod
     def RDSym(p_mix, p_pub, alpha):
-        #return  max(PMixED.renyiDiv(p_mix.type(torch.float32), p_pub.type(torch.float32), alpha=alpha).type(torch.float32),
-        #           PMixED.renyiDiv(p_pub.type(torch.float32), p_mix.type(torch.float64), alpha=alpha).type(torch.float32)).item()
-        return  max(PMixED.renyiDiv(p_mix, p_pub, alpha=alpha),
-                   PMixED.renyiDiv(p_pub, p_mix, alpha=alpha)).item()
+        return  max(PMixED.renyiDiv(p_mix.type(torch.float64), p_pub.type(torch.float64), alpha=alpha).type(torch.float32),
+                   PMixED.renyiDiv(p_pub.type(torch.float64), p_mix.type(torch.float64), alpha=alpha).type(torch.float32)).item()
+        #return  max(PMixED.renyiDiv(p_mix, p_pub, alpha=alpha),
+        #           PMixED.renyiDiv(p_pub, p_mix, alpha=alpha)).item()
 
     def lambda_solver_bisection(self, p, p_pub):
         def f(lambd):
